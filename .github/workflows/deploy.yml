@@ -21,7 +21,13 @@ jobs:
         run: npm install -g @google/clasp
 
       - name: Create Authentication File
-        run: echo '${{ secrets.CLASPRC_JSON }}' > ~/.clasprc.json
+        run: |
+          if [ -z "${{ secrets.CLASPRC_JSON }}" ]; then
+            echo "Error: CLASPRC_JSON secret is empty or not set in GitHub Secrets."
+            exit 1
+          fi
+          echo '${{ secrets.CLASPRC_JSON }}' > ~/.clasprc.json
+          chmod 600 ~/.clasprc.json
 
       - name: Push to Apps Script
         run: clasp push --force
