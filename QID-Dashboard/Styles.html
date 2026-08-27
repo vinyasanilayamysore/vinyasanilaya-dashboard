@@ -1,0 +1,217 @@
+<style>
+  :root {
+    --primary: #2c3e50;
+    --accent: #27ae60;
+  }
+
+  body {
+    background-color: #f4f7f6;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+
+  .header-banner {
+    background: var(--primary);
+    height: 120px;
+    border-radius: 0 0 25px 25px;
+  }
+
+  .mt-n4 {
+    margin-top: -40px;
+  }
+
+  .stat-card {
+    border-radius: 18px;
+  }
+
+  .filter-pill {
+    background: white;
+    border: 1px solid #dee2e6;
+    border-radius: 20px;
+    padding: 6px 15px;
+    font-size: 0.85rem;
+    color: #495057;
+    outline: none;
+  }
+
+  .guest-card {
+    background: white;
+    border-radius: 16px;
+    border: none;
+    margin-bottom: 12px;
+    transition: transform 0.2s ease;
+  }
+
+  .guest-card:hover {
+    transform: translateY(-2px);
+  }
+
+  .source-tag {
+    font-size: 0.65rem;
+    padding: 4px 10px;
+    border-radius: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .tag-airbnb {
+    background-color: #FF5A5F20;
+    color: #FF5A5F;
+  }
+
+  .tag-personal {
+    background-color: #27ae6020;
+    color: #27ae60;
+  }
+
+  .fab {
+    position: fixed;
+    bottom: 25px;
+    right: 25px;
+    width: 60px;
+    height: 60px;
+    background: var(--accent);
+    color: white;
+    border-radius: 50%;
+    border: none;
+    font-size: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
+
+  .font-italic {
+    font-style: italic;
+  }
+
+  /* Vinyasa Nilaya Dark Green */
+  .text-primary {
+    color: #004d40 !important;
+  }
+
+  /* Timeline View for Mobile */
+  #guest-feed {
+    padding: 10px 0;
+  }
+
+  .bg-success-subtle {
+    background-color: #d1e7dd;
+  }
+
+  .text-success {
+    color: #0f5132 !important;
+  }
+
+  /* Official WhatsApp Green styles */
+  .btn-success {
+    background-color: #25D366;
+    border: none;
+  }
+
+  .btn-success:hover {
+    background-color: #128C7E;
+  }
+
+  .border-start {
+    border-left: 1px dashed #dee2e6 !important;
+  }
+
+  /* =========================================================================
+     DIGITAL HUB COMPACT FILTERS & BATCH SELECTION EXTRA STYLES
+     ========================================================================= */
+
+  /* Smooth animation transition properties for the popping batch deletion bar */
+  #qidBatchActionPanel {
+    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s ease-in-out;
+    animation: slideUpFloatingPanel 0.3s forwards;
+  }
+
+  @keyframes slideUpFloatingPanel {
+    from {
+      transform: translate(-50%, 20px);
+      opacity: 0;
+    }
+
+    to {
+      transform: translate(-50%, 0);
+      opacity: 1;
+    }
+  }
+
+  /* Cursor pointer indicator rules */
+  .cursor-pointer {
+    cursor: pointer !important;
+  }
+
+  /* Prevent double-click text selection highlights around checkboxes and buttons */
+  .unselectable {
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+  }
+
+  /* Professional hover border adjustment for custom dropdown selects */
+  .form-select-sm:hover {
+    border-color: #198754 !important;
+    /* Matches your signature Vinyasa Green */
+  }
+
+  /* Checked styling accents for custom dashboard cards checkbox inputs */
+  .qid-row-checkbox:checked {
+    background-color: #198754 !important;
+    border-color: #198754 !important;
+    box-shadow: 0 0 0 0.25rem rgba(25, 135, 84, 0.25) !important;
+  }
+
+  /* =========================================================================
+     SINGLE LINE UNIFIED FILTERS (MOBILE-OPTIMIZED FRAMEWORK)
+     ========================================================================= */
+
+  /* Custom compact layout handler to force absolute single-row behavior */
+  .single-line-filter-container {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    /* Strictly prevents wrapping onto a second line */
+    align-items: center;
+    gap: 6px;
+    /* Tight, responsive spacing between elements */
+    width: 100%;
+  }
+
+  /* Ensure form controls contract cleanly on tight mobile viewports */
+  .compact-select {
+    flex: 1;
+    min-width: 0 !important;
+    /* Allows the element to shrink below default browser widths */
+    height: 34px !important;
+    font-size: 12px !important;
+    padding-left: 6px !important;
+    padding-right: 20px !important;
+    /* Maintains Bootstrap dropdown arrow layout visibility */
+  }
+
+  /* Minor alignment correction for the checkbox wrapper */
+  .compact-checkbox-wrapper {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    /* Prevents text and checkbox from squeezing or distorting */
+  }
+
+  /* Remove distorted default focus ring and give a clean rounded highlight */
+  #filterSearchQuery:focus {
+    outline: none !important;
+    box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.15) !important;
+    /* Soft rounded aura */
+    border-color: #86b7fe !important;
+    background-color: #ffffff !important;
+  }
+
+  /* Optional: Clean look for dropdown pills as well */
+  .filter-pill:focus {
+    outline: none !important;
+    box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.15) !important;
+    border-color: #86b7fe !important;
+  }
+</style>

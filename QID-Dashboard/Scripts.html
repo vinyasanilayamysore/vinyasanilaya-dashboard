@@ -1,0 +1,2244 @@
+<script>
+  window.onload = loadDashboard;
+
+  // Global scope memory variables to act as the single source of truth locally
+  window.dashboardCache = null;
+
+/**
+ * Loads data either from memory cache or by calling the backend server script
+ */
+function loadDashboard(forcedRefresh = false) {
+  const yearEl = document.getElementById('filterYear');
+  const selectedYear = yearEl && yearEl.value ? yearEl.value : new Date().getFullYear().toString();
+
+  // Context check: If data is already cached locally and this is a standard filter switch, use it!
+  if (window.dashboardCache && !forcedRefresh) {
+      console.log(">>> [PERFORMANCE] Serving view from local memory allocation cache.");
+      processAndFilterData(window.dashboardCache);
+      return;
+  }
+
+  // Otherwise, toggle loading animation state and make the server call
+  if (typeof toggleRefreshLoadingState === 'function') {
+      toggleRefreshLoadingState(true);
+  }
+  console.log(">>> [NETWORK] Pulling fresh data stream from server ledger...");
+
+  google.script.run
+      .withSuccessHandler(function(response) {
+          if (typeof toggleRefreshLoadingState === 'function') {
+              toggleRefreshLoadingState(false);
+          }
+
+          // Clear any stale availability results when fresh server data lands
+          if (typeof resetFloorAvailabilityFilters === 'function') {
+              resetFloorAvailabilityFilters();
+          }
+          
+          // Commit payload directly into memory
+          window.dashboardCache = response;
+
+          if (response && response.guests && typeof rebuildMonthDropdown === 'function') {
+              rebuildMonthDropdown(response.guests);
+          }
+          
+          // Route payload into the visual layout processors
+          processAndFilterData(response);
+      })
+      .withFailureHandler(function(err) {
+          if (typeof toggleRefreshLoadingState === 'function') {
+              toggleRefreshLoadingState(false);
+          }
+          console.error(">>> [CRITICAL] Ledger network grab failed: ", err.message || err);
+          
+          const feedEl = document.getElementById('guest-feed');
+          if (feedEl) {
+              feedEl.innerHTML = `<div class="alert alert-danger mx-3">Failed to load real-time database data: ${err.message || err}</div>`;
+          }
+      })
+      .getDashboardData(selectedYear);
+}
+
+/**
+ * User action script bound directly to the refresh icon button
+ */
+function refreshDashboardData() {
+    console.log(">>> [ACTION] Refresh triggered. Evicting cache...");
+
+    // 1. Reset floor availability UI selections & badges
+    if (typeof resetFloorAvailabilityFilters === 'function') {
+        resetFloorAvailabilityFilters();
+    }
+
+    // 2. Reset search input and hide clear button
+    const searchEl = document.getElementById('filterSearchQuery');
+    if (searchEl) {
+        searchEl.value = '';
+    }
+    const clearBtn = document.getElementById('btnClearSearch');
+    if (clearBtn) {
+        clearBtn.classList.add('d-none');
+    }
+
+    // 3. Reset dropdown filters to default ("All")
+    const sourceEl = document.getElementById('filterSource');
+    if (sourceEl) sourceEl.value = 'All';
+
+    const floorEl = document.getElementById('filterFloor');
+    if (floorEl) floorEl.value = 'All';
+
+    const monthEl = document.getElementById('filterMonth');
+    if (monthEl) monthEl.value = 'All';
+
+    // 4. Force a fresh pull from server
+    loadDashboard(true);
+}
+
+/**
+ * Resets all dashboard filter controls to default and re-filters cached data instantly
+ */
+function resetDashboardFilters() {
+  // 1. Reset Month dropdown safely to index 0 ("All Months") or 'All'
+  const filterMonth = document.getElementById('filterMonth');
+  if (filterMonth) {
+    // Try setting value first; if it doesn't exist, fall back to index 0
+    filterMonth.value = 'All';
+    if (filterMonth.selectedIndex === -1 && filterMonth.options.length > 0) {
+      filterMonth.selectedIndex = 0;
+    }
+  }
+
+  // 2. Reset Source and Floor dropdowns back to "All"
+  const filterSource = document.getElementById('filterSource');
+  const filterFloor = document.getElementById('filterFloor');
+
+  if (filterSource) filterSource.value = 'All';
+  if (filterFloor) filterFloor.value = 'All';
+
+  // 3. Clear search input and hide the inline clear button ('X')
+  const searchQuery = document.getElementById('filterSearchQuery');
+  const btnClearSearch = document.getElementById('btnClearSearch');
+
+  if (searchQuery) searchQuery.value = '';
+  if (btnClearSearch) btnClearSearch.classList.add('d-none');
+
+  // 4. Trigger local cache re-filtering instantly
+  if (typeof handleFilterChange === 'function') {
+    handleFilterChange();
+  } else if (window.dashboardCache) {
+    processAndFilterData(window.dashboardCache);
+  }
+}
+
+  /**
+   * Handle filtering instantaneously in client-side memory
+   */
+  function handleMonthChange() {
+      if (window.dashboardCache) {
+          processAndFilterData(window.dashboardCache);
+      } else {
+          loadDashboard();
+      }
+  }
+
+  /**
+   * Consolidated Change Handler triggered by any dropdown state updates
+   */
+  function handleFilterChange() {
+      if (window.dashboardCache) {
+          processAndFilterData(window.dashboardCache);
+      }
+  }
+
+  /**
+   * Resets the Floor Availability date inputs, button state, and output badges
+   */
+  function resetFloorAvailabilityFilters() {
+      const fromDate = document.getElementById('check-from-date');
+      const toDate = document.getElementById('check-to-date');
+      const statusContainer = document.getElementById('floor-status-container');
+      const btnText = document.getElementById('avail-btn-text');
+      const spinner = document.getElementById('avail-spinner');
+
+      if (fromDate) fromDate.value = '';
+      if (toDate) toDate.value = '';
+      if (statusContainer) statusContainer.innerHTML = '';
+      
+      // Reset button state in case a check was in progress
+      if (btnText) btnText.textContent = 'Check Now';
+      if (spinner) spinner.classList.add('d-none');
+  }
+
+  /**
+   * Clear the text search input and re-evaluate filters
+   */
+  function clearSearchInput() {
+      const searchEl = document.getElementById('filterSearchQuery');
+      if (searchEl) {
+          searchEl.value = '';
+          handleFilterChange();
+      }
+  }
+
+
+  /**
+ * Processes and filters cached or fresh dashboard data based on current UI selections
+ */
+function processAndFilterData(rawData) {
+    if (!rawData) return;
+    
+    // 1. Deep clone isolation
+    let dataCopy = JSON.parse(JSON.stringify(rawData));
+    
+    // 2. Read live UI filter states
+    const monthFilterEl = document.getElementById('filterMonth');
+    const targetMonth = monthFilterEl ? monthFilterEl.value : "All";
+    
+    const yearFilterEl = document.getElementById('filterYear');
+    const currentYear = yearFilterEl ? yearFilterEl.value : new Date().getFullYear().toString();
+
+    const sourceFilterEl = document.getElementById('filterSource');
+    const targetSource = sourceFilterEl ? sourceFilterEl.value : "All";
+
+    const floorFilterEl = document.getElementById('filterFloor');
+    const targetFloor = floorFilterEl ? floorFilterEl.value : "All";
+
+    // Read Search Input and manage clear button visibility
+    const searchFilterEl = document.getElementById('filterSearchQuery');
+    const rawSearchQuery = searchFilterEl ? searchFilterEl.value.trim().toLowerCase() : "";
+    
+    const clearBtn = document.getElementById('btnClearSearch');
+    if (clearBtn) {
+        if (rawSearchQuery.length > 0) {
+            clearBtn.classList.remove('d-none');
+        } else {
+            clearBtn.classList.add('d-none');
+        }
+    }
+
+    // Clean search string (strips non-numeric characters for phone searching)
+    const cleanPhoneQuery = rawSearchQuery.replace(/\D/g, '');
+
+    // 3. Extract baseline working guest list array
+    let guestsRaw = dataCopy.guests || [];
+    let workingArray = Array.isArray(guestsRaw) ? guestsRaw : Object.values(guestsRaw);
+    
+    // 4. FILTER MATRIX EVALUATION
+    let filteredArray = workingArray.filter(g => {
+        // --- Dimension A: Month Matching ---
+        let matchMonth = true;
+        if (targetMonth !== "All" && targetMonth !== "") {
+            if (!g.Month) return false;
+            const recordMonth = String(g.Month).trim().toLowerCase();
+            const selectedMonth = targetMonth.toLowerCase();
+            matchMonth = recordMonth.startsWith(selectedMonth) || selectedMonth.startsWith(recordMonth);
+        }
+
+        // --- Dimension B: Booking Source Matching ---
+        const guestSource = g.Source ? g.Source.toString().trim().toLowerCase() : "";
+        const matchSource = (targetSource === "All" || guestSource === targetSource.toLowerCase());
+
+        // --- Dimension C: Property Floor Assignment Matching ---
+        const guestFloor = g.Floor ? g.Floor.toString().trim().toLowerCase() : "";
+        const selectedFloor = targetFloor.toLowerCase();
+        let matchFloor = (targetFloor === "All" || targetFloor === "") 
+          ? true 
+          : (guestFloor.includes(selectedFloor) || selectedFloor.includes(guestFloor));
+
+        // --- Dimension D: Search Query Matching (Name OR Mobile) ---
+        let matchSearch = true;
+        if (rawSearchQuery !== "") {
+            const guestName = g.Name ? String(g.Name).toLowerCase() : "";
+            
+            // Check guest mobile (evaluate raw string and digits-only format)
+            const guestPhoneRaw = (g.Phone || g.Mobile || g["Mobile No"] || "").toString();
+            const guestPhoneDigits = guestPhoneRaw.replace(/\D/g, '');
+
+            const nameMatches = guestName.includes(rawSearchQuery);
+            const phoneMatches = guestPhoneRaw.toLowerCase().includes(rawSearchQuery) || 
+                                (cleanPhoneQuery.length > 0 && guestPhoneDigits.includes(cleanPhoneQuery));
+
+            matchSearch = nameMatches || phoneMatches;
+        }
+
+        return matchMonth && matchSource && matchFloor && matchSearch;
+    });
+    
+    // 5. COMPUTE KPI METRICS
+    let runningRevenue = 0;
+    filteredArray.forEach(g => {
+        let amtStr = g.Amount ? String(g.Amount).replace(/[₹,]/g, '') : "0";
+        let amt = parseFloat(amtStr) || 0;
+        runningRevenue += amt;
+    });
+
+    // 6. Build contextual UI title tracking label
+    let periodLabel = (targetMonth === "All" || targetMonth === "") 
+      ? `All Months ${currentYear}` 
+      : `${targetMonth} ${currentYear}`;
+
+    if (targetSource !== "All") periodLabel += ` (${targetSource})`;
+    if (targetFloor !== "All") periodLabel += ` (${targetFloor})`;
+    if (rawSearchQuery !== "") periodLabel += ` [Filtered by "${rawSearchQuery}"]`;
+
+    // 7. Commit updated data back to payload copy safely
+    dataCopy.guests = filteredArray;
+    dataCopy.summary = dataCopy.summary || {};
+    dataCopy.summary.totalRevenue = runningRevenue.toLocaleString('en-IN');
+    dataCopy.summary.count = filteredArray.length;
+    dataCopy.summary.period = `${periodLabel} Collection Summary`;
+
+    // 8. Render dashboard view
+    if (typeof renderDashboard === 'function') {
+        renderDashboard(dataCopy);
+    }
+}
+  
+  /**
+   * UI loading toggle helper function to animate icons smoothly
+   */
+  function toggleRefreshLoadingState(isLoading) {
+    const icon = document.getElementById('refresh-icon');
+    const spinner = document.getElementById('refresh-spinner');
+    const btn = document.getElementById('refresh-dashboard-btn');
+    const feedContainer = document.getElementById('guest-feed'); // Target the main layout card area
+    
+    if (!icon || !spinner || !btn) return;
+
+    if (isLoading) {
+        // 1. Convert the header button state to spinning
+        icon.classList.add('d-none');
+        spinner.classList.remove('d-none');
+        btn.disabled = true;
+
+        // 2. ENFORCED: Inject your exact primary center spinner back into the feed
+        if (feedContainer) {
+            feedContainer.innerHTML = `
+                <div class="text-center py-5">
+                    <div class="spinner-border text-primary opacity-25" role="status"></div>
+                </div>
+            `;
+        }
+    } else {
+        // 3. Revert header button back to normal arrow icon
+        icon.classList.remove('d-none');
+        spinner.classList.add('d-none');
+        btn.disabled = false;
+        
+        // Note: feedContainer.innerHTML is handled and replaced natively by renderDashboard(data)
+    }
+}
+
+  // Ensure tooltips map correctly to the fresh elements on lifecycle load sequence
+  document.addEventListener("DOMContentLoaded", function() {
+      if (typeof initTooltips === 'function') initTooltips();
+      loadDashboard(); // Core boot sequence initialization logic trigger
+  });
+
+/**
+ * Initializes the dashboard lifecycle. Resolves available year tabs,
+ * updates the filter options, and sets the dashboard to the current year.
+ */
+function initializeDashboardLifecycle() {
+    console.log(">>> [BOOT] Querying live database tab names...");
+    
+    google.script.run
+        .withSuccessHandler(function(config) {
+            const yearDropdown = document.getElementById('filterYear');
+            if (!yearDropdown) return;
+            
+            // Clear out any old elements safely
+            yearDropdown.innerHTML = '';
+            
+            // Populate options dynamically from real Google Sheets structures
+            config.years.forEach(year => {
+                const option = document.createElement('option');
+                option.value = year;
+                option.innerText = year;
+                
+                // Set active matching selection on initial render state
+                if (year === config.activeYear) {
+                    option.selected = true;
+                }
+                yearDropdown.appendChild(option);
+            });
+            
+            console.log(`>>> [BOOT] Year filters armed: [${config.years.join(', ')}]. Active year defaults to: [${config.activeYear}].`);
+            
+            // Kickstart standard dashboard data fetch using the dynamically evaluated selected year state
+            loadDashboard();
+        })
+        .withFailureHandler(function(err) {
+            console.error(">>> [BOOT CRASH] System failed to inventory layout years: ", err.message);
+            // Hard fallback if connectivity issues happen on configuration query
+            const yearDropdown = document.getElementById('filterYear');
+            if (yearDropdown) {
+                yearDropdown.innerHTML = `<option value="${new Date().getFullYear()}">${new Date().getFullYear()}</option>`;
+            }
+            loadDashboard();
+        })
+        .getAvailableYearsAndInitialize();
+}
+
+// Redirect your page initialization anchor to target the new boot method
+document.addEventListener("DOMContentLoaded", function() {
+    if (typeof initTooltips === 'function') initTooltips();
+    
+    // Instead of calling loadDashboard() directly, hit the year configurations analyzer first!
+    initializeDashboardLifecycle(); 
+});
+
+/**
+ * Dynamically rebuilds the Month Dropdown chronologically (January -> December)
+ * based exclusively on data rows present in the active sheet year.
+ */
+function rebuildMonthDropdown(guests) {
+    const monthDropdown = document.getElementById('filterMonth');
+    if (!monthDropdown) return;
+
+    // 1. Save the user's active filter viewport selection before wiping elements
+    const previousSelection = monthDropdown.value || "";
+
+    // 2. Reset dropdown container with the constant baseline master switch
+    monthDropdown.innerHTML = '<option value="">All Months</option>';
+
+    if (!guests) return;
+
+    // Normalize incoming data format structure down to a real collection loop wrapper
+    const guestList = Array.isArray(guests) ? guests : Object.values(guests);
+
+    // 3. Extract completely unique month names present in your ledger data
+    const uniqueMonths = [];
+    guestList.forEach(g => {
+        if (g.Month && g.Month.trim() !== "") {
+            // Capitalize first letter to guarantee matching consistency (e.g. "may" -> "May")
+            const m = g.Month.trim().charAt(0).toUpperCase() + g.Month.trim().slice(1).toLowerCase();
+            if (!uniqueMonths.includes(m)) {
+                uniqueMonths.push(m);
+            }
+        }
+    });
+
+    // 4. FIXED CHRONOLOGICAL ORDER DICTIONARY: Maps full names to calendar metrics
+    const calendarSequence = { 
+        "January": 1, "February": 2, "March": 3, "April": 4, "May": 5, "June": 6, 
+        "July": 7, "August": 8, "September": 9, "October": 10, "November": 11, "December": 12 
+    };
+    
+    // Sort array entries mathematically from 1 up to 12
+    uniqueMonths.sort((a, b) => (calendarSequence[a] || 99) - (calendarSequence[b] || 99));
+
+    // 5. Generate and append the option tags dynamically into your view component
+    uniqueMonths.forEach(monthName => {
+        const option = document.createElement('option');
+        option.value = monthName;      // Sets structural matching value to full word (e.g., "January")
+        option.innerText = monthName;  // Sets readable interface presentation label
+        
+        // Retain the user's active focus if it matches an option in the new dataset
+        if (monthName === previousSelection) {
+            option.selected = true;
+        }
+        
+        monthDropdown.appendChild(option);
+    });
+
+    // If their active filter doesn't exist in this specific historical year, reset the look cleanly to "All"
+    if (previousSelection && !uniqueMonths.includes(previousSelection)) {
+        monthDropdown.value = "";
+    }
+}
+
+// =========================================================================
+// STANDALONE ENCODED MESSAGE LINK HELPER (Prevents Template Nesting Syntax Errors)
+// =========================================================================
+function getEncodedWAMessageLink(type, phone, guestName, financialData = {}) {
+    const fullName = guestName ? guestName.trim() : 'Guest';
+    let msg = '';
+    
+    // Extract contextual variables with fallback parameters
+    const floor = financialData.floor || 'Ground';
+    const checkIn = financialData.checkIn || 'Not Specified';
+    
+    // 🔑 SAFE NUMERIC PARSING FOR GUESTS & DAYS
+    const parsedGuests = Math.max(1, parseInt(financialData.guests, 10) || 1);
+    const parsedNights = Math.max(1, parseInt(financialData.days, 10) || 1);
+    
+    const nightsCount = parsedNights.toString();
+    const guestsCount = parsedGuests.toString();
+    
+    const advance = financialData.advance || '0';
+    const totalBill = financialData.totalBill || '0';
+    const balance = financialData.balance || '0';
+    const source = (financialData.source || 'Personal').toString().trim().toLowerCase(); // Safe casing resolution
+
+    // Format Check-In Date cleanly if it follows YYYY-MM-DD
+    let formattedDate = checkIn;
+    try {
+        const dParts = checkIn.split('-');
+        if (dParts.length === 3) {
+            const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            formattedDate = `${dParts[2]}-${months[parseInt(dParts[1], 10) - 1]}-${dParts[0]}`;
+        }
+    } catch(e) {}
+
+    // =========================================================================
+    // 1. GUEST VERIFICATION TEMPLATE (Crisp & Direct)
+    // =========================================================================
+    if (type === 'verification') {
+        let greetingHeader = '';
+             
+        if (source.includes('airbnb')) {
+            greetingHeader = 'Namaste ' + fullName + ' Ji,\n\n' +
+                             'Thank you for booking with us! 🏡✨\n\n';
+        }
+
+        msg = greetingHeader +
+              'To ensure a seamless check-in and pre-arrival verification, please review your registration profile and securely upload your digital ID via our guest dashboard portal here:\n\n' +
+              '👉 https://vinyasanilaya.s.gy/GuestVerification\n\n' +
+              'Please feel free to message us here if you have any questions or require early arrival coordination.';
+              
+    // =========================================================================
+    // 2. WELCOME MESSAGES (Split cleanly by Floor Assignment)
+    // =========================================================================
+    } else if (type === 'welcome') {
+        let greetingHeader = '';
+               
+        if (source.includes('airbnb')) {
+            greetingHeader = 'Namaste ' + fullName + ' Ji,\n\n' +
+                             'Thank you for booking with us! 🏡✨\n\n';
+        }
+
+        // Base Itinerary Details block common to both layouts
+        const itinerarySummary = 'Your check-in details are:\n' +
+                                 '📅 *Check-In Date:* ' + formattedDate + '\n' +
+                                 '🚪 *Floor Booked:* ' + floor + ' Floor\n' +
+                                 '👥 *Total Guests:* ' + guestsCount + ' Pax\n' +
+                                 '🌙 *Duration:* ' + nightsCount + ' Night(s)\n\n' +
+                                 '📍 *Google Maps Location:*\n' +
+                                 'https://maps.app.goo.gl/uPQwpY8pa5r3bo9U7 \n\n' +
+                                 '⏰ *Timings:*\n' +
+                                 '• Check-in: 12:00 PM – 1:00 PM\n' +
+                                 '• Check-out: 11:00 AM\n\n';
+
+        const coordinationRules = '👨‍✈️ *Arrival Coordination:*\n' +
+                                  'Please call *9972433994* approximately *1 hour before arrival*. My father will meet you at the property to assist with check-in.\n\n' +
+                                  '🏡 *Important House Notes & Guidelines:*\n' +
+                                  '• *Premises Rules:* To maintain the peaceful sanctity of our home, *smoking, consumption of alcohol, and non-vegetarian food are strictly prohibited* anywhere within the premises. Please observe designated quiet hours.\n' +
+                                  '• *Sustainability:* Help us support eco-friendly living by separating your waste into the designated dry and wet disposal bins.\n';
+
+        if (floor.toLowerCase() === 'second' || floor.toLowerCase() === 's') {
+            msg = greetingHeader + 
+                  itinerarySummary +
+                  '📶 *Wi-Fi Credentials:*\n' +
+                  '• Network Name: *VinyasaNilaya_SF*\n' +
+                  '• Password: *VinyasaSF@1620*\n\n' +
+                  '🧺 *Laundry:* A washing machine is accessible on this floor for a minimal additional usage fee.\n\n' +
+                  coordinationRules;
+        } else {
+            msg = greetingHeader + 
+                  itinerarySummary +
+                  '🎬 *Guest Walkthrough Video:*\n' +
+                  'https://youtu.be/qbCQwGe8JeU?si=r7THeWcGLrPvPJD3 \n\n' +
+                  '📶 *Wi-Fi Credentials:*\n' +
+                  '• Network Name: *VinyasaNilaya_GF*\n' +
+                  '• Password: *VinyasaGuest@1234*\n\n' +
+                  '🛌 *Extra Amenities:* Traveling with a 3rd guest? Please check the bedroom wardrobe for extra sheets/pillows to set up the sofa-cum-bed.\n\n' +
+                  coordinationRules;
+        }
+             
+    // =========================================================================
+    // 3. FEEDBACK FOR AIRBNB CHANNELS
+    // =========================================================================
+    } else if (type === 'feedback_airbnb') {
+        msg = 'Thank you for staying with us at *Vinyasa Nilaya*! 🌿 It was our pleasure hosting you.\n\n' +
+              'As Airbnb prompts you for a review, we would be incredibly grateful if you could share your 5-star experience on the platform to help our community grow.\n\n' +
+              '💡 *Suggestions?* If there is anything we could improve, please reply directly right here—your private feedback is incredibly valuable to us.\n\n' +
+              '🏡 Feel free to save this contact for direct bookings and preferred availability on your next trip!';
+              
+    // =========================================================================
+    // 4. FEEDBACK FOR PERSONAL GUESTS
+    // =========================================================================
+    } else if (type === 'feedback_personal') {
+        msg = 'Thank you for staying with us at *Vinyasa Nilaya*! 🌿 It was our absolute pleasure hosting you.\n\n' +
+              'Could you take a quick minute to share your experience on Google Maps? Your support means the world to our small team:\n' +
+              '👉 https://maps.app.goo.gl/FEKDxc9pfZZRbe1u5 \n\n' +
+              '💡 *Suggestions?* If there is anything we could have done better, reply directly right here to let us know.\n\n' +
+              '🏡 Keep this chat active for direct booking on your next trip!';
+    
+    // =========================================================================
+    // 5. PAYMENT REQUEST
+    // =========================================================================
+    } else if (type === 'payment_advance') {
+      
+        msg = 'Namaste ' + fullName + ' Ji,\n\n' +
+              'Thank you for choosing *Vinyasa Nilaya*! 🏡✨\n\n' +
+              'To confirm your booking on the *' + floor + ' Floor*, kindly complete the advance deposit.\n\n' +
+              '📊 *Stay Breakdown:* \n' +
+              '• Total Stay Value: *₹' + totalBill + '*\n' +
+              '• *Requested Advance Amount: ₹' + advance + '*\n' +
+              '• Balance at Checkout: *₹' + balance + '*\n\n' +
+              '💳 *Payment Details:*\n' +
+              '• *UPI ID:* 9980950950@sbi\n\n' +
+              '🏛️ *Bank Account Transfer:* \n' +
+              '• Name: *Pratigna Foundation*\n' +
+              '• A/C Number: *41357848290*\n' +
+              '• Account Type: *Current*\n' +
+              '• IFSC Code: *SBIN0013441*\n' +
+              '• Bank/Branch: *SBI, Nagadevenahalli, Bangalore*\n\n' +
+              'Once done, please reply with a *screenshot of the confirmation message*. We will immediately secure your dates! 🙏';
+
+    // =========================================================================
+    // 6. CHECKOUT / BALANCE OUTSTANDING CLEARANCE TEMPLATE
+    // =========================================================================
+    } else if (type === 'payment_checkout') {
+
+        const gName = fullName;
+        const nightsText = parsedNights + ' Night(s)';
+        
+        // Base rate and extra guest rates
+        const bRate = (typeof baseRate !== 'undefined' && baseRate) ? Number(baseRate) : 1200;
+        const exRate = (typeof extraPersonRate !== 'undefined' && extraPersonRate) ? Number(extraPersonRate) : 400;
+        
+        // 🔑 EXTRA GUEST CALCULATION: 1 base guest + remainder as extra guests
+        const exCount = Math.max(0, parsedGuests - 1); 
+        const exCharge = exCount * exRate;
+        const dRate = bRate + exCharge;
+        
+        const tBill = (typeof totalBill !== 'undefined' && totalBill) ? Number(totalBill) : (dRate * parsedNights);
+        const adv = (typeof advance !== 'undefined') ? Number(advance) : 0;
+        const bal = (typeof balance !== 'undefined') ? Number(balance) : Math.max(0, tBill - adv);
+
+        // Formatting extra guests line clearly
+        const extraGuestLine = exCount > 0 
+            ? '• Extra Guests (' + exCount + ' Person(s) @ ₹' + exRate + '/each): *₹' + exCharge + '/night*'
+            : '• Extra Guests: *None*';
+
+        msg = '📊 *Final Invoice & Settlement Breakdown*\n\n' +
+              'Dear *' + gName + '*,\n' +
+              'Thank you for staying with us! Here is the itemized breakdown of your stay bill:\n\n' +
+              '📋 *Tariff Itemization (' + nightsText + ')*\n' +
+              '• Base Occupancy (1 Person): *₹' + bRate + '/night*\n' +
+              extraGuestLine + '\n' +
+              '───────────────────\n' +
+              '• *Daily Rate:* *₹' + dRate + '/day*\n' +
+              '• *Total Stay Charge (' + nightsText + '):* *₹' + tBill + '*\n\n' +
+              '💳 *Payment Summary*\n' +
+              '• Total Stay Amount: *₹' + tBill + '*\n' +
+              '• Advance Received: *₹' + adv + '*\n' +
+              '• *Balance Outstanding:* *₹' + bal + '*\n\n' +
+              '📌 *Settlement Details*\n' +
+              '• *UPI ID:* `9980950950@sbi`\n\n' +
+              'Kindly clear the balance amount at your convenience prior to checkout / key handover.\n\n' +
+              '_*Note:* Base prices and extra guest charges are subject to seasonal revisions._\n\n' +
+              'We hope you had a comfortable stay and wish you safe travels on your onward journey! 🙏';
+
+    // =========================================================================
+    // 7. CUSTOM EMPTY TEMPLATE
+    // =========================================================================
+    } else if (type === 'custom_empty') {
+        msg = '';
+    }
+
+    // Clean and validate international phone string protocols
+    let cleanPhone = phone.toString().replace(/\D/g, '');
+    if (cleanPhone.length === 10) {
+        cleanPhone = '91' + cleanPhone;
+    }
+    
+    return 'https://api.whatsapp.com/send?phone=' + cleanPhone + '&text=' + encodeURIComponent(msg);
+}
+
+/*Render dashobard data*/
+function renderDashboard(data) {
+    // 1. Log the entire raw response from the server
+    console.log(">>> [DEBUG] Server Data Received:", data);
+
+    // --- TURN OFF ALL SPINNERS AUTOMATICALLY ---
+    toggleRefreshLoadingState(false);
+
+    // 2. Initial Null Check with specific log
+    if (!data) {
+        console.error(">>> [ERROR] Data is null or undefined.");
+        document.getElementById('guest-feed').innerHTML = 
+            '<div class="alert alert-danger mx-3">Error: No response from server.</div>';
+        return;
+    }
+
+    if (!data.summary) {
+        console.error(">>> [ERROR] 'summary' property missing from data object. Data keys found:", Object.keys(data));
+        document.getElementById('guest-feed').innerHTML = 
+            '<div class="alert alert-danger mx-3">Error: Summary data missing.</div>';
+        return;
+    }
+
+    // --- FORCE CONVERT TYPE TO GUARANTEE A CLEAN REVERSAL ---
+    let normalizedGuests = [];
+    
+    if (Array.isArray(data.guests)) {
+        normalizedGuests = data.guests.slice();
+    } else if (typeof data.guests === 'object' && data.guests !== null) {
+        normalizedGuests = Object.keys(data.guests)
+                                 .sort((a, b) => Number(a) - Number(b))
+                                 .map(key => data.guests[key]);
+    }
+
+    // =========================================================================
+    // 🔑 CALCULATE TOTAL STAYED DAYS & CHECK-INS
+    // =========================================================================
+    const totalCheckins = data.summary.count !== undefined ? data.summary.count : normalizedGuests.length;
+    
+    // Sum up 'Days' for all guests in the retrieved dataset
+    const totalStayDays = normalizedGuests.reduce((sum, guest) => {
+        const nights = parseInt(guest.Days || '1', 10);
+        return sum + (isNaN(nights) ? 0 : nights);
+    }, 0);
+
+    const currentPeriod = data.summary.period || 'Selected Period';
+
+    // 3. Log Summary details
+    console.log(">>> [DEBUG] Summary Details:", {
+        revenue: data.summary.totalRevenue,
+        count: totalCheckins,
+        totalStayDays: totalStayDays,
+        period: currentPeriod
+    });
+
+    // Update Summary UI
+    document.getElementById('stat-revenue').innerText = data.summary.totalRevenue;
+    document.getElementById('stat-count').innerText = data.summary.count;
+    document.getElementById('period-label').innerText = data.summary.period;
+
+    // Safely update total stay days on card metric if element exists
+    const statDaysEl = document.getElementById('stat-days');
+    if (statDaysEl) {
+        // Formats as "(192 Days)" or "192 Days Total Stay" based on element context
+        statDaysEl.innerText = statDaysEl.classList.contains('small') 
+            ? `${totalStayDays} Days Total Stay` 
+            : `(${totalStayDays} Days)`;
+    }
+
+    // --- COMPONENT UPDATE: Inject the new All-Time Revenue target element value ---
+    const lifetimeRevEl = document.getElementById('stat-lifetime-revenue');
+    const lifetimeCountEl = document.getElementById('stat-lifetime-count');
+
+    if (lifetimeRevEl && data.summary.lifetimeRevenue) {
+        lifetimeRevEl.innerText = '₹' + data.summary.lifetimeRevenue;
+    }
+    
+    if (lifetimeCountEl && data.summary.lifetimeCount !== undefined) {
+        lifetimeCountEl.innerText = data.summary.lifetimeCount.toLocaleString('en-IN');
+    }
+
+    const feed = document.getElementById('guest-feed');
+    feed.innerHTML = '';
+
+    // 4. Log Guest List status
+    if (normalizedGuests.length === 0) {
+        console.warn(">>> [DEBUG] Guest list is empty.");
+        feed.innerHTML = '<div class="text-center mt-5 text-muted">No entries found for this period.</div>';
+        return;
+    }
+    
+    console.log(`>>> [DEBUG] Processing ${normalizedGuests.length} guests.`);
+
+    const invertedGuestFeed = normalizedGuests.reverse();
+
+    invertedGuestFeed.forEach((guest, index) => {
+        const source = guest.Source || "Personal";
+        const sourceClass = source === 'AirBnb' || source === 'Airbnb' ? 'tag-airbnb' : 'tag-personal';
+        const isVerified = guest.isVerified || false; 
+
+        // Extract Reservation ID safely across varying property formats
+        const resId = guest.ReservationID || guest.Reservation_ID || guest.reservationId || '';
+
+        // =========================================================================
+        // 1. DATE, WEEKDAY, RELATIVE TIMING & CHECKOUT CALCULATIONS
+        // =========================================================================
+        let relativeCheckInText = '';
+        let dayOfWeek = '';
+        let isCheckoutToday = false;
+        let checkoutFormattedDate = '';
+
+        if (guest.Check_in_Date) {
+            // Normalize Date Format (handles YYYY-MM-DD cleanly)
+            const rawDateStr = guest.Check_in_Date.split(',')[0].trim();
+            const checkInDate = new Date(rawDateStr + 'T00:00:00');
+
+            if (!isNaN(checkInDate.getTime())) {
+                const daysOfWeek = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+                dayOfWeek = daysOfWeek[checkInDate.getDay()];
+
+                // Today normalized to midnight for accurate day math
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+
+                const diffTime = checkInDate - today;
+                const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+
+                if (diffDays === 0) {
+                    relativeCheckInText = `<span class="badge bg-danger text-white rounded-pill ms-1" style="font-size: 10px;">Check-in Today</span>`;
+                } else if (diffDays === 1) {
+                    relativeCheckInText = `<span class="badge bg-warning text-dark rounded-pill ms-1" style="font-size: 10px;">Tomorrow</span>`;
+                } else if (diffDays > 1) {
+                    relativeCheckInText = `<span class="badge bg-primary-subtle text-primary border-0 rounded-pill ms-1" style="font-size: 10px;">In ${diffDays} days</span>`;
+                } else {
+                    relativeCheckInText = `<span class="badge bg-light text-muted border-0 rounded-pill ms-1" style="font-size: 10px;">Past Stay</span>`;
+                }
+
+                // Compute Exact Checkout Date (CheckIn + Nights)
+                const stayNights = parseInt(guest.Days || '1', 10);
+                const checkoutDate = new Date(checkInDate);
+                checkoutDate.setDate(checkoutDate.getDate() + stayNights);
+
+                const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                checkoutFormattedDate = `${daysOfWeek[checkoutDate.getDay()]}, ${checkoutDate.getDate()} ${months[checkoutDate.getMonth()]}`;
+
+                // Check if TODAY is Checkout Day
+                const checkToday = new Date();
+                checkToday.setHours(0, 0, 0, 0);
+                if (checkoutDate.getTime() === checkToday.getTime()) {
+                    isCheckoutToday = true;
+                }
+            }
+        }
+
+        // =========================================================================
+        // 2. FINANCIAL / BALANCE HIGHLIGHT
+        // =========================================================================
+        const totalAmount = Number(guest.Amount || guest.Total_Bill || 0);
+        const balanceDue = Number(guest.Balance || guest.Balance_Due || 0);
+
+        let balanceHtml = '';
+        if (balanceDue > 0) {
+            balanceHtml = `<span class="badge bg-danger-subtle text-danger border border-danger-subtle rounded-pill ms-2 px-2 py-1" style="font-size: 11px;">
+                            <i class="bi bi-exclamation-circle-fill me-1"></i>Due: ₹${balanceDue.toLocaleString('en-IN')}
+                           </span>`;
+        } else {
+            balanceHtml = `<span class="badge bg-success-subtle text-success border-0 rounded-pill ms-2 px-2 py-1" style="font-size: 10px;">
+                            <i class="bi bi-check-circle-fill me-1"></i>Fully Paid
+                           </span>`;
+        }
+
+        // =========================================================================
+        // 3. BADGE & WHATSAPP ENGINE
+        // =========================================================================
+        let badgeHtml = '';
+        const cleanSource = (guest.Source || '').toLowerCase().trim();
+
+        if (cleanSource === 'airbnb') {
+            badgeHtml = '<span class="badge bg-primary-subtle text-primary border-0 rounded-pill" style="font-size: 10px; background-color: #FF5A5F15; color: #FF5A5F !important;"><i class="bi bi-shield-check me-1"></i>Airbnb Verified</span>';
+        } else if (isVerified) {
+            badgeHtml = '<span class="badge bg-success-subtle text-success border-0 rounded-pill" style="font-size: 10px;"><i class="bi bi-shield-check me-1"></i>QID Verified</span>';
+        } else {
+            badgeHtml = '<span class="badge bg-light text-muted border-0 rounded-pill" style="font-size: 10px;"><i class="bi bi-shield-exclamation me-1"></i>Pending ID</span>';
+        }
+
+        let whatsappActionsHtml = '';
+        if (guest.WhatsApp_Num && guest.WhatsApp_Num.toString().trim().length >= 10) {
+            let rawNum = guest.WhatsApp_Num.toString().trim();
+            if (rawNum.startsWith("+91")) rawNum = rawNum.replace("+91", "").trim();
+            if (rawNum.startsWith("91") && rawNum.length > 10) rawNum = rawNum.substring(2).trim();
+
+            const targetPhone = `91${rawNum}`;
+            const dynamicMetadata = {
+                reservationId: resId, // 🔑 RESERVATION ID METADATA
+                floor: guest.Floor || 'Ground',
+                checkIn: guest.Check_in_Date || 'Not Specified',
+                guests: guest.Guests || '1',
+                days: guest.Days || '1',
+                advance: guest.Advance || guest.Advance_Paid || '0',
+                totalBill: guest.Total_Bill || guest.Amount || '0',
+                balance: guest.Balance || guest.Balance_Due || '0',
+                source: guest.Source || 'Personal'
+            };
+
+            const linkVerification = getEncodedWAMessageLink('verification', targetPhone, guest.Name, dynamicMetadata);
+            const linkWelcome      = getEncodedWAMessageLink('welcome', targetPhone, guest.Name, dynamicMetadata);
+
+            let linkFeedback = cleanSource === 'airbnb' 
+                ? getEncodedWAMessageLink('feedback_airbnb', targetPhone, guest.Name, dynamicMetadata)
+                : getEncodedWAMessageLink('feedback_personal', targetPhone, guest.Name, dynamicMetadata);
+
+            const linkCustomEmpty  = getEncodedWAMessageLink('custom_empty', targetPhone, guest.Name, dynamicMetadata);
+
+            whatsappActionsHtml = `
+                <div class="dropdown d-inline-block ms-2">
+                    <button class="btn btn-sm d-inline-flex align-items-center justify-content-center dropdown-toggle shadow-sm" 
+                            type="button" 
+                            id="waMenu_${index}" 
+                            data-bs-toggle="dropdown" 
+                            aria-expanded="false"
+                            style="background-color: #25D366; color: white; border: none; font-size: 11px; padding: 2px 8px; border-radius: 20px; font-weight: 500; height: 22px;">
+                        <i class="bi bi-whatsapp me-1" style="font-size: 11px;"></i> Chat
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end shadow border-0 p-1" aria-labelledby="waMenu_${index}" style="border-radius: 10px; min-width: 210px; font-size: 12px; z-index: 1050;">
+                        <li><a class="dropdown-item py-2 d-flex align-items-center" href="${linkVerification}" target="_blank" style="border-radius: 6px;"><i class="bi bi-shield-check text-success me-2 fs-6"></i> 1. Verification Link</a></li>
+                        <li><a class="dropdown-item py-2 d-flex align-items-center" href="${linkWelcome}" target="_blank" style="border-radius: 6px;"><i class="bi bi-emoji-smile text-primary me-2 fs-6"></i> 2. Welcome Guest</a></li>
+                        <li><a class="dropdown-item py-2 d-flex align-items-center" href="${linkFeedback}" target="_blank" style="border-radius: 6px;"><i class="bi bi-heart text-danger me-2 fs-6"></i> 3. Checkout & Feedback</a></li>
+                        <li><a class="dropdown-item py-2 d-flex align-items-center" href="${linkCustomEmpty}" target="_blank" style="border-radius: 6px;"><i class="bi bi-chat-left-text text-secondary me-2 fs-6"></i> 4. Blank Custom Note</a></li>
+                    </ul>
+                </div>
+            `;
+        }
+
+        const safeGuestJson = JSON.stringify(guest).replace(/"/g, '&quot;');
+        const safeNameEscaped = (guest.Name || '').replace(/'/g, "\\'");
+        const safeResIdEscaped = (resId || '').replace(/'/g, "\\'");
+        const guestYear = guest.Check_in_Date ? guest.Check_in_Date.split(',')[1]?.trim() : new Date().getFullYear().toString();
+
+        // =========================================================================
+        // 4. CARD LAYOUT CONSTRUCTION
+        // =========================================================================
+        const card = `
+          <div class="card guest-card shadow-sm p-3 mb-3 border-0 position-relative" style="border-radius: 14px;">
+            
+            <!-- CHECKOUT DAY NOTICE BANNER -->
+            ${isCheckoutToday ? `
+              <div class="alert alert-warning border-0 d-flex align-items-center gap-2 py-1 px-3 mb-2 rounded-3" style="font-size: 11px; background-color: #fff3cd; color: #664d03;">
+                <i class="bi bi-bell-fill text-warning fs-6"></i>
+                <div>
+                  <strong>Checkout Today!</strong> ${balanceDue > 0 ? `Kindly collect outstanding balance of <strong>₹${balanceDue.toLocaleString('en-IN')}</strong> during key drop-off.` : 'Guest checks out today by 11:00 AM.'}
+                </div>
+              </div>
+            ` : ''}
+
+            <!-- EDIT / DELETE ACTIONS -->
+            <div class="position-absolute d-flex gap-2 align-items-center" style="top: 12px; right: 12px; z-index: 10;">
+              <button class="btn btn-link p-1 text-muted shadow-none border-0" onclick="openEditModal(${safeGuestJson})" data-bs-toggle="tooltip" title="Edit Guest Data" style="text-decoration: none;">
+                <i class="bi bi-pencil-square text-secondary fs-5"></i>
+              </button>
+              <!-- 🔑 PASS RESERVATION ID FIRST -->
+              <button class="btn btn-link p-1 text-danger shadow-none border-0" onclick="actionPurgeGuestRecord('${safeResIdEscaped}', '${safeNameEscaped}', '${guest.Check_in_Date || ''}')" data-bs-toggle="tooltip" title="Delete Guest Ledger Entry" style="text-decoration: none;">
+                <i class="bi bi-trash fs-5"></i>
+              </button>
+            </div>
+
+            <!-- SOURCE, RESERVATION ID & VERIFICATION TAGS -->
+            <div class="d-flex justify-content-between align-items-center mb-2" style="padding-right: 65px;">
+              <div class="d-flex align-items-center gap-1">
+                <span class="source-tag ${sourceClass} fw-bold">${source}</span>
+                ${resId ? `<span class="badge bg-light text-secondary border rounded-pill font-monospace" style="font-size: 9px; padding: 2px 6px;">#${resId}</span>` : ''}
+              </div>
+              ${badgeHtml}
+            </div>
+
+            <!-- GUEST NAME & WHATSAPP MENU -->
+            <div class="d-flex justify-content-between align-items-center mb-2" style="padding-right: 20px;">
+              <div class="d-flex align-items-center" style="max-width: 75%;">
+                <h6 class="fw-bold mb-0 text-truncate" style="line-height: 1.2;">${guest.Name}</h6>
+                ${whatsappActionsHtml}
+              </div>
+              <div class="text-warning small ms-2" style="white-space: nowrap;">${guest.Customer_Ratings || ''}</div>
+            </div>
+
+            <!-- DATES ROW: CHECK-IN WITH DAY/RELATIVE BADGE & DURATION/CHECKOUT -->
+            <div class="row g-0 py-2 border-top border-bottom my-2">
+              <div class="col-7 small text-muted">
+                <div class="d-block" style="font-size: 10px; letter-spacing: 0.5px; font-weight: 600;">CHECK-IN</div>
+                <div class="text-dark fw-medium d-flex align-items-center flex-wrap gap-1">
+                  <span>${guest.Check_in_Date || 'N/A'}</span>
+                  ${dayOfWeek ? `<span class="fw-bold text-primary">(${dayOfWeek})</span>` : ''}
+                  ${relativeCheckInText}
+                </div>
+              </div>
+              <div class="col-5 small text-muted text-end border-start ps-2">
+                <div class="d-block" style="font-size: 10px; letter-spacing: 0.5px; font-weight: 600;">DURATION & CHECKOUT</div>
+                <div class="text-dark fw-medium">${guest.Days || 1} Night(s)</div>
+                ${checkoutFormattedDate ? `<div class="text-muted" style="font-size: 10px;">Out: ${checkoutFormattedDate}</div>` : ''}
+              </div>
+            </div>
+
+            <!-- AMOUNT & BALANCE DUE ROW -->
+            <div class="d-flex justify-content-between align-items-center mt-1">
+              <div>
+                <div class="d-flex align-items-center">
+                  <span class="h5 fw-bold text-primary mb-0">₹${totalAmount.toLocaleString('en-IN')}</span>
+                  ${balanceHtml}
+                </div>
+                <div class="small text-muted mt-1" style="font-size: 11px;">
+                  ${guest.Guests || 0} Guests • Floor: ${guest.Floor || '-'}
+                </div>
+              </div>
+              
+              <div class="text-end small text-muted">
+                <i class="bi bi-geo-alt me-1"></i>${guest.Floor || 'Ground'}
+              </div>
+            </div>
+
+            ${guest.Comments ? `
+              <div class="mt-2 pt-2 border-top small text-muted">
+                  <em><i class="bi bi-chat-dots me-1"></i>${guest.Comments}</em>
+              </div>
+            ` : ''}
+          </div>
+        `;
+        feed.innerHTML += card;
+    });
+
+    console.log(">>> [DEBUG] Render complete.");
+}
+
+/*Airbnb Sync through emails*/
+function triggerAirbnbSync() {
+    const icon = document.getElementById('sync-icon');
+    const spinner = document.getElementById('sync-spinner');
+    const btn = document.getElementById('sync-btn');
+
+    // 1. Dynamically read the exact year the user is looking at right now
+    const yearEl = document.getElementById('filterYear');
+    const activeDashboardYear = yearEl ? yearEl.value : new Date().getFullYear().toString();
+
+     console.log("activeDashboardYear :", activeDashboardYear);
+    
+    // Switch to loading state
+    icon.classList.add('d-none');
+    spinner.classList.remove('d-none');
+    btn.disabled = true;
+
+    // Call the Google Apps Script Backend
+    google.script.run
+        .withSuccessHandler(function(result) {
+            // Restore button state
+            icon.classList.remove('d-none');
+            spinner.classList.add('d-none');
+            btn.disabled = false;
+            
+            // 3. Populate and trigger the Premium Custom Modal UI
+            document.getElementById('syncModalTitle').innerText = "Sync Successful";
+            document.getElementById('syncModalMessage').innerText = result || "Airbnb confirmation emails read and cataloged perfectly.";
+            
+            const successModal = new bootstrap.Modal(document.getElementById('syncResultModal'));
+            successModal.show();
+            
+            // Refresh dashboard data automatically if your fetch function is named loadDashboard
+            loadDashboard(true); 
+        })
+        .withFailureHandler(function(err) {
+            icon.classList.remove('d-none');
+            spinner.classList.add('d-none');
+            btn.disabled = false;
+            //alert("Sync Failed: " + err.message);
+            // Display error gracefully within the same styled modal context frame
+            document.getElementById('syncModalTitle').innerText = "Sync Deferred";
+            document.getElementById('syncModalMessage').innerText = "System encountered an error: " + err.message;
+            
+            const errorModal = new bootstrap.Modal(document.getElementById('syncResultModal'));
+            errorModal.show();
+        })
+        .syncAirbnbEmails(activeDashboardYear); // Calls the backend function
+}
+
+// Automatically initialize all Bootstrap tooltips on the page load sequence
+document.addEventListener("DOMContentLoaded", function() {
+    const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+    tooltipTriggerList.map(function (tooltipTriggerEl) {
+        return new bootstrap.Tooltip(tooltipTriggerEl, {
+            boundary: document.body,
+            trigger : 'hover' // Guarantees it disappears cleanly immediately when clicked
+        });
+    });
+});
+
+// A comprehensive, bulletproof way to initialize Bootstrap tooltips
+function initTooltips() {
+  try {
+    // 1. Verify Bootstrap's JavaScript library is safely loaded in the memory ecosystem
+    if (typeof bootstrap !== 'undefined' && bootstrap.Tooltip) {
+      const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+      
+      tooltipTriggerList.map(function (tooltipTriggerEl) {
+        // Clean up any old instances before rebuilding to prevent detached memory leaks
+        const oldInstance = bootstrap.Tooltip.getInstance(tooltipTriggerEl);
+        if (oldInstance) oldInstance.dispose();
+        
+        return new bootstrap.Tooltip(tooltipTriggerEl, {
+          boundary: document.body,
+          trigger: 'hover',
+          fallbackPlacements: ['top', 'left'] // Automatically adjusts if screen space is tight on mobile
+        });
+      });
+      console.log(">>> [UI] Bootstrap Tooltips successfully bound and armed.");
+    } else {
+      console.warn(">>> [UI] Bootstrap JS library missing. Retrying in 500ms...");
+      setTimeout(initTooltips, 500); // Retry loop structure if script load tags are lagging
+    }
+  } catch (err) {
+    console.error("Tooltip engine init failed: ", err);
+  }
+}
+
+// Trigger initialization on both standard DOM ready statuses
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initTooltips);
+} else {
+    initTooltips(); // Execute immediately if DOM elements are already structurally hot
+}
+
+
+/********** Modal to ADD / EDIT Guest Details **********/
+let bootstrapFormModalInstance = null;
+
+function getModalInstance() {
+    const modalEl = document.getElementById('guestFormModal');
+    if (!modalEl) {
+        console.error(">>> ❌ [MODAL ERROR] Element #guestFormModal not found in the DOM.");
+        return null;
+    }
+    
+    // 1. Check if Bootstrap already bound an active instance to this DOM element
+    let instance = bootstrap.Modal.getInstance(modalEl);
+    
+    // 2. If not found, look at our global variable or instantiate a fresh one
+    if (!instance) {
+        if (!bootstrapFormModalInstance) {
+            bootstrapFormModalInstance = new bootstrap.Modal(modalEl);
+        }
+        instance = bootstrapFormModalInstance;
+    } else {
+        // Keep our global variable synced with Bootstrap's internal state
+        bootstrapFormModalInstance = instance;
+    }
+    
+    return instance;
+}
+
+
+/**
+ * Toggles the financial matrix block visibility based on the chosen booking source
+ */
+function toggleFinancialPanel() {
+    const source = document.getElementById('inputSource').value;
+    const financialBlock = document.getElementById('personalFinancialBlock');
+    
+    if (source === 'Personal') {
+        financialBlock.style.display = 'block';
+        calculateTotalBill();
+    } else {
+        financialBlock.style.display = 'none';
+    }
+}
+
+function calculateTotalBill() {
+    const sourceElement = document.getElementById('inputSource');
+    const source = sourceElement ? sourceElement.value : 'Personal';
+    
+    const inputAmountEl = document.getElementById('inputAmount');
+    const advancePaid = inputAmountEl ? (parseFloat(inputAmountEl.value) || 0) : 0;
+    
+    const totalBillEl = document.getElementById('inputTotalBill');
+    const balanceDueEl = document.getElementById('inputBalanceDue');
+
+    if (source !== 'Personal') {
+        if (totalBillEl) totalBillEl.value = advancePaid.toFixed(0);
+        if (balanceDueEl) balanceDueEl.value = "0";
+        return;
+    }
+
+    // Fixed elements targeting to properly match the form IDs
+    const guestsEl = document.getElementById('inputGuests');
+    const daysEl = document.getElementById('inputDays');
+    const basePriceEl = document.getElementById('inputBasePrice');
+    const extraFeeEl = document.getElementById('inputExtraGuestFee');
+
+    const totalGuests = guestsEl ? (parseInt(guestsEl.value, 10) || 1) : 1;
+    const durationNights = daysEl ? (parseInt(daysEl.value, 10) || 1) : 1;
+    const basePrice = basePriceEl ? (parseFloat(basePriceEl.value) || 0) : 0;
+    const extraFee = extraFeeEl ? (parseFloat(extraFeeEl.value) || 0) : 0;
+    
+    const extraGuestsCount = Math.max(0, totalGuests - 1);
+    const calculatedTotal = (basePrice + (extraGuestsCount * extraFee)) * durationNights;
+    const balanceDue = calculatedTotal - advancePaid;
+
+    if (totalBillEl) totalBillEl.value = calculatedTotal.toFixed(0);
+    if (balanceDueEl) balanceDueEl.value = balanceDue.toFixed(0);
+}
+
+// Ensure event hook evaluates immediately when advance paid fields change
+document.addEventListener("DOMContentLoaded", function() {
+    const fields = ['inputAmount', 'inputGuestsCount', 'inputDays', 'inputBasePrice', 'inputExtraGuestFee'];
+    fields.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('input', calculateTotalBill);
+    });
+});
+
+/**
+ * Frontend execution wrapper that grabs real-time parameters and opens the WhatsApp communication pipeline instantly
+ */
+function dispatchDirectWhatsApp(templateType) {
+    const guestName = document.getElementById('inputName').value.trim();
+    const mobile = document.getElementById('inputMobile').value.replace(/\s+/g, '');
+    
+    if (!guestName || mobile.length < 10) {
+        alert("Validation Alert: Please verify that a valid Guest Name and 10-digit mobile number have been supplied.");
+        return;
+    }
+
+    // Capture real-time data states from the modal fields
+    const financialData = {
+        floor: document.getElementById('inputFloor').value,
+        guests: document.getElementById('inputGuests').value || '1',
+        days: document.getElementById('inputDays').value || '1',
+        advance: document.getElementById('inputAmount').value || "0",
+        totalBill: document.getElementById('inputTotalBill').value || "0",
+        balance: document.getElementById('inputBalanceDue').value || "0"
+    };
+
+    // Generate link string locally instantly
+    const waUrl = getEncodedWAMessageLink(templateType, mobile, guestName, financialData);
+    
+    // Launch secure child instance tab window context
+    window.open(waUrl, '_blank');
+}
+
+/**
+ * Configure UI context for fresh record creation path
+ */
+function openAddModal() {
+    document.getElementById('guestCrudForm').reset();
+    document.getElementById('formMode').value = "ADD";
+    document.getElementById('formRowIndex').value = "";
+    document.getElementById('guestFormModalLabel').innerText = "Add New Guest Record";
+    document.getElementById('formSubmitBtn').innerText = "Save Record";
+    
+    document.getElementById('inputBasePrice').value = "1200";
+    document.getElementById('inputExtraGuestFee').value = "400";
+    document.getElementById('inputAmount').value = "0"; // Advance defaults to zero
+
+    // Clear the reservation ID for new entries
+    const resIdInputEl = document.getElementById('inputReservationId');
+    if (resIdInputEl) resIdInputEl.value = "";
+    
+    document.getElementById('inputSource').value = "Personal"; 
+    
+    toggleFinancialPanel();
+    calculateTotalBill();
+    getModalInstance().show();
+}
+
+/**
+ * Parses and loads database indices cleanly during UI record edit requests
+ */
+
+function openEditModal(guestObj) {
+    // 1. Initial Entry Diagnostics
+    console.log(">>> 🔓 [MODAL OPEN] Triggered. Raw guest data received from card:", guestObj);
+
+    // Reset inline error alerts if any exist from previous validation checks
+    const alertBanner = document.getElementById('formAlertContainer');
+    if (alertBanner) {
+        alertBanner.style.display = 'none';
+        alertBanner.innerHTML = '';
+    }
+
+    document.getElementById('guestCrudForm').reset();
+    document.getElementById('formMode').value = "EDIT";
+    
+    // Bind unique structural references
+    const calculatedRowIndex = guestObj.Row_Number || guestObj.rowNum || "";
+    document.getElementById('formRowIndex').value = calculatedRowIndex;
+    
+    // 🔑 BIND UNIQUE RESERVATION ID
+    const extractedResId = guestObj.ReservationID || guestObj.Reservation_ID || guestObj.reservationId || "";
+    const resIdInputEl = document.getElementById('inputReservationId');
+    if (resIdInputEl) {
+        resIdInputEl.value = extractedResId;
+    }
+    console.log(`>>> 📍 [MODAL OPEN] Targeted Row: [${calculatedRowIndex}] | Reservation ID: [${extractedResId}]`);
+    
+    // Fill Text & Digital Elements
+    document.getElementById('inputName').value = guestObj.Name || "";
+    
+    // Fill standard financial parameters mapping keys safely
+    let fetchedAdvance = "0";
+    if (guestObj.Advance !== undefined && guestObj.Advance !== null && guestObj.Advance !== "") {
+        fetchedAdvance = guestObj.Advance;
+    } else if (guestObj.Advance_Paid !== undefined && guestObj.Advance_Paid !== null && guestObj.Advance_Paid !== "") {
+        fetchedAdvance = guestObj.Advance_Paid;
+    } else if (guestObj.Amount !== undefined && guestObj.Amount !== null && guestObj.Amount !== "") {
+        fetchedAdvance = guestObj.Amount; // Default to Total Amount if no advance record exists
+    }
+    
+    document.getElementById('inputAmount').value = String(fetchedAdvance).replace(/[₹,]/g,'');
+    document.getElementById('inputBasePrice').value = guestObj["Base_Price"] ? String(guestObj["Base_Price"]).replace(/[₹,]/g,'') : "1200";
+    document.getElementById('inputExtraGuestFee').value = guestObj["Extra_Pax"] ? String(guestObj["Extra_Pax"]).replace(/[₹,]/g,'') : "400";
+
+    document.getElementById('inputGuests').value = guestObj.Guests || "1";
+    document.getElementById('inputDays').value = guestObj.Days || "1";
+    document.getElementById('inputComments').value = guestObj.Comments || "";
+
+    // Parse Mobile Number (Strip country code to match data protocols)
+    let rawMobile = guestObj.WhatsApp_Num || guestObj.Mobile || "";
+    let cleanMobile = rawMobile.toString().replace(/^\+91/, '').trim();
+    document.getElementById('inputMobile').value = cleanMobile;
+
+    // --- SAFE LOCAL ISO EXTRACTION SYSTEM ---
+    if (guestObj.Check_in_Date) {
+        let dateStr = String(guestObj.Check_in_Date).trim();
+        let parsedDate = new Date(dateStr);
+        
+        if (!isNaN(parsedDate.getTime())) {
+            let yyyy = parsedDate.getFullYear();
+            let mm = String(parsedDate.getMonth() + 1).padStart(2, '0');
+            let dd = String(parsedDate.getDate()).padStart(2, '0');
+            
+            let formattedIsoDate = `${yyyy}-${mm}-${dd}`;
+            
+            document.getElementById('inputCheckIn').value = formattedIsoDate;
+            console.log(`>>> 📅 [MODAL OPEN] Date parsed cleanly: "${dateStr}" ➔ "${formattedIsoDate}"`);
+        } else {
+            if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+                document.getElementById('inputCheckIn').value = dateStr;
+            } else {
+                document.getElementById('inputCheckIn').value = "";
+                console.warn(`>>> ⚠️ [MODAL OPEN] Date fallback could not translate structural data: "${dateStr}"`);
+            }
+        }
+    } else {
+        console.warn(">>> ⚠️ [MODAL OPEN] " + guestObj.Name + "'s profile is missing a Check_in_Date property value.");
+        document.getElementById('inputCheckIn').value = "";
+    }
+
+    // --- DROPDOWN SELECTORS MATCHING ---
+    const rawSource = guestObj.Source ? guestObj.Source.toString().trim().toLowerCase() : "";
+    const sourceSelectEl = document.getElementById('inputSource');
+    if (rawSource.includes("airbnb")) {
+        sourceSelectEl.value = "Airbnb";
+    } else if (rawSource.includes("personal")) {
+        sourceSelectEl.value = "Personal";
+    } else {
+        sourceSelectEl.value = "Airbnb"; 
+    }
+
+    const rawFloor = guestObj.Floor ? guestObj.Floor.toString().trim().toLowerCase() : "";
+    const floorSelectEl = document.getElementById('inputFloor');
+    if (rawFloor.includes("ground") || rawFloor === "g") {
+        floorSelectEl.value = "Ground";
+    } else if (rawFloor.includes("second") || rawFloor === "s") {
+        floorSelectEl.value = "Second";
+    } else {
+        floorSelectEl.value = "Ground"; 
+    }
+
+    const rawRatings = guestObj.Customer_Ratings || "";
+    document.getElementById('inputRatings').value = rawRatings;
+
+    console.log(`>>> 🎛️ [MODAL OPEN] Dropdowns assigned configurations: Source=[${sourceSelectEl.value}], Floor=[${floorSelectEl.value}], Ratings=[${rawRatings || 'None'}]`);
+
+    if (typeof toggleFinancialPanel === "function") toggleFinancialPanel();
+    if (typeof calculateTotalBill === "function") calculateTotalBill();
+
+    document.getElementById('guestFormModalLabel').innerText = "Modify Guest Registration";
+    document.getElementById('formSubmitBtn').innerText = "Update Changes";
+    getModalInstance().show();
+}
+
+/** Handle form data for addition and modify*/
+function handleFormSubmit(e) {
+    e.preventDefault();
+    
+    const submitBtn = document.getElementById('formSubmitBtn');
+    const alertBanner = document.getElementById('formAlertContainer');
+    const nameInput = document.getElementById('inputName');
+     
+    if (alertBanner) {
+        alertBanner.style.display = 'none';
+        alertBanner.innerHTML = '';
+    }
+    
+    const checkInInput = document.getElementById('inputCheckIn');
+    if (!checkInInput || !checkInInput.value) {
+        alert("Please select a valid Check-In Date before submitting.");
+        return false;
+    }
+
+    submitBtn.disabled = true;
+    submitBtn.innerText = "Processing Booking...";
+
+    const mode = document.getElementById('formMode').value;
+    const rowIdx = document.getElementById('formRowIndex').value;
+    
+   
+    const filterYearEl = document.getElementById('filterYear');
+    const activeYear = filterYearEl ? filterYearEl.value : new Date().getFullYear().toString();
+
+    const sourceVal = document.getElementById('inputSource').value;
+    const advancePaidAmt = parseFloat(document.getElementById('inputAmount').value) || 0;
+    
+    const computedTotalBill = sourceVal === 'Personal' ? (parseFloat(document.getElementById('inputTotalBill').value) || 0) : advancePaidAmt;
+    const computedBalanceDue = sourceVal === 'Personal' ? (parseFloat(document.getElementById('inputBalanceDue').value) || 0) : 0;
+
+    // 🔑 EXTRACT RESERVATION ID WITH FALLBACK
+    const resIdEl = document.getElementById('inputReservationId');
+    let reservationIdVal = resIdEl ? resIdEl.value.trim() : "";
+
+    // Emergency log check if empty during EDIT mode
+    if (mode === "EDIT" && !reservationIdVal) {
+        console.warn(">>> ⚠️ [FORM SUBMIT] Reservation ID input element missing or empty during EDIT mode!");
+    }
+
+    const payload = {
+        mode: mode,
+        reservationId: reservationIdVal, // 🔑 PASSED TO BACKEND FOR PRECISE MATCHING
+        name: nameInput.value.trim(),
+        mobile: document.getElementById('inputMobile').value.replace(/\s+/g, ''), 
+        guests: parseInt(document.getElementById('inputGuests').value) || 1, 
+        checkIn: checkInInput.value, 
+        days: parseInt(document.getElementById('inputDays').value) || 1,
+        source: sourceVal,
+        floor: document.getElementById('inputFloor').value,
+        ratings: document.getElementById('inputRatings').value,
+        comments: document.getElementById('inputComments').value.trim(),
+        year: activeYear,
+        rowIndex: rowIdx,
+        
+        advancePaid: advancePaidAmt,
+        totalBill: computedTotalBill,
+        balanceDue: computedBalanceDue,
+
+        basePrice: parseFloat(document.getElementById('inputBasePrice').value) || 0,
+        extraPaxFee: parseFloat(document.getElementById('inputExtraGuestFee').value) || 0
+    };
+
+    console.log(`>>> 🚀 [CRUD DISPATCH] Mode: [${mode}] | Res ID: [${reservationIdVal}] | Year Target: [${activeYear}]`);
+    
+    google.script.run
+        .withSuccessHandler(function(response) {
+            console.log(`>>> ✅ [CRUD TRANSACTION SUCCESS] Backend Response: "${response}"`);
+            submitBtn.disabled = false;
+            submitBtn.innerText = (mode === "EDIT") ? "Update Booking" : "Save Booking";
+            getModalInstance().hide();
+            loadDashboard(true); 
+        })
+        .withFailureHandler(function(err) {
+            console.error(">>> ❌ [CRUD TRANSACTION FAILURE] API pipeline execution failed:", err);
+            
+            submitBtn.disabled = false;
+            submitBtn.innerText = (mode === "EDIT") ? "Update Booking" : "Save Booking";
+
+            if (err.message && err.message.includes("Duplicate Entry Blocked")) {
+                if (alertBanner) {
+                    alertBanner.innerHTML = `<strong>⚠️ Reservation Conflict:</strong> This guest name is already registered for this date. Please check your duplicates.`;
+                    alertBanner.style.display = 'block';
+                    alertBanner.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                }
+                
+                if (nameInput) {
+                    nameInput.focus();
+                    nameInput.select();
+                }
+            } else {
+                if (alertBanner) {
+                    alertBanner.innerHTML = `<strong>❌ Database Error:</strong> ${err.message}`;
+                    alertBanner.style.display = 'block';
+                }
+            }
+        })
+        .writeGuestDataRow(mode, payload);
+}
+
+/**
+ * Checks if selected Floor & Check-In Date range collides with existing bookings in cache
+ */
+function checkDateAvailability() {
+    const alertBox = document.getElementById('dateAvailabilityAlert');
+    const checkInInput = document.getElementById('inputCheckIn');
+    const floorInput = document.getElementById('inputFloor');
+    const daysInput = document.getElementById('inputDays');
+    const currentResId = document.getElementById('inputReservationId')?.value || "";
+
+    if (!alertBox || !checkInInput || !floorInput) return;
+
+    const selectedDateStr = checkInInput.value;
+    const selectedFloor = floorInput.value ? floorInput.value.trim().toLowerCase() : "";
+    const numNights = parseInt(daysInput?.value || "1", 10);
+
+    // Reset if no date chosen
+    if (!selectedDateStr || !selectedFloor) {
+        alertBox.className = "mt-1 d-none";
+        alertBox.innerHTML = "";
+        return;
+    }
+
+    // 1. Calculate selected date range bounds
+    const newStart = new Date(selectedDateStr);
+    newStart.setHours(0, 0, 0, 0);
+
+    const newEnd = new Date(newStart);
+    newEnd.setDate(newEnd.getDate() + numNights);
+
+    // 2. Query cached guest records
+    if (!window.dashboardCache || !window.dashboardCache.guests) {
+        alertBox.className = "mt-1 d-none";
+        return;
+    }
+
+    const guests = Array.isArray(window.dashboardCache.guests) 
+        ? window.dashboardCache.guests 
+        : Object.values(window.dashboardCache.guests);
+
+    // 3. Look for overlap on the same floor
+    let conflictGuest = null;
+
+    for (let g of guests) {
+        // Skip current record when editing an existing guest
+        const gResId = (g.ReservationID || g.reservationId || "").toString().trim();
+        if (currentResId && gResId === currentResId.toString().trim()) {
+            continue;
+        }
+
+        const gFloor = g.Floor ? g.Floor.toString().trim().toLowerCase() : "";
+        if (!gFloor.includes(selectedFloor) && !selectedFloor.includes(gFloor)) {
+            continue; // Different floor, no conflict
+        }
+
+        // Parse existing guest stay range
+        if (!g.Check_in_Date) continue;
+        const existStart = new Date(g.Check_in_Date);
+        if (isNaN(existStart.getTime())) continue;
+        existStart.setHours(0, 0, 0, 0);
+
+        const existNights = parseInt(g.Days || g.Nights || "1", 10);
+        const existEnd = new Date(existStart);
+        existEnd.setDate(existEnd.getDate() + existNights);
+
+        // Date Range Overlap Formula: (StartA < EndB) AND (EndA > StartB)
+        if (newStart < existEnd && newEnd > existStart) {
+            conflictGuest = g;
+            break; // Conflict discovered
+        }
+    }
+
+    // 4. Render UI status badge
+    if (conflictGuest) {
+        const guestName = conflictGuest.Name || "Another Guest";
+        const sourceName = conflictGuest.Source || "Booked";
+        
+        alertBox.className = "mt-1 alert alert-warning py-1 px-2 mb-0 d-flex align-items-center gap-1 border-0 rounded-3 shadow-sm";
+        alertBox.style.fontSize = "11px";
+        alertBox.style.backgroundColor = "#fff3cd";
+        alertBox.style.color = "#664d03";
+        alertBox.innerHTML = `
+            <i class="bi bi-exclamation-triangle-fill text-warning fs-6"></i>
+            <span><strong>Already Booked:</strong> ${guestName} (${sourceName})</span>
+        `;
+    } else {
+        alertBox.className = "mt-1 alert alert-success py-1 px-2 mb-0 d-flex align-items-center gap-1 border-0 rounded-3 shadow-sm";
+        alertBox.style.fontSize = "11px";
+        alertBox.style.backgroundColor = "#d1e7dd";
+        alertBox.style.color = "#0f5132";
+        alertBox.innerHTML = `
+            <i class="bi bi-check-circle-fill text-success fs-6"></i>
+            <span>Floor Available</span>
+        `;
+    }
+}
+
+
+// =========================================================================
+// QID DATASTORE & CORE CONTROLLER LOGIC
+// =========================================================================
+let globalQidDataStore = [];      
+let activeSelectedSlNos = [];     
+
+function getQidModalInstance() {
+    return bootstrap.Modal.getOrCreateInstance(document.getElementById('qidHubModal'));
+}
+
+// =========================================================================
+// QID CONTROL MODULES: VAULT INTERFACES, LIVE FILTERING & CHECKBOX ARRAYS
+// =========================================================================
+
+/**
+ * Open the Hub Modal and pull fresh row maps from the backend database
+ */
+/**
+ * Open the Hub Modal, dynamically fetch Drive year configurations, 
+ * populate the year select field, and retrieve secure registry listings.
+ */
+function openQidHubModal() {
+    // 1. Clear out any sticky backdrop overlays from previous sessions
+    const orphanedBackdrops = document.querySelectorAll('.modal-backdrop');
+    orphanedBackdrops.forEach(el => el.remove());
+    document.body.classList.remove('modal-open');
+    
+    // 2. Display the structural modal workspace framework container instantly
+    getQidModalInstance().show();
+    
+    document.getElementById('qidUserFeed').innerHTML = 
+        '<div class="col-12 text-center py-5">' +
+            '<div class="spinner-border text-success spinner-border-sm me-2" role="status"></div>' +
+            '<span class="text-muted small">Accessing Secure ID Vault...</span>' +
+        '</div>';
+        
+    // 3. DYNAMIC LIFECYCLE FORK: Query dynamic year folders from Google Drive
+    console.log(">>> [UI LIFE] Querying Drive storage mapping allocations for dynamic years...");
+    google.script.run
+        .withSuccessHandler(function(config) {
+            const yearDropdown = document.getElementById('qidFilterYear');
+            if (yearDropdown) {
+                // Clear existing dynamic elements but leave "All Years" intact
+                yearDropdown.innerHTML = '<option value="">All Years</option>';
+                
+                // Inject option definitions dynamically from real Drive folder profiles
+                config.years.forEach(year => {
+                    const option = document.createElement('option');
+                    option.value = year;
+                    option.innerText = year;
+                    
+                    // Mark match default active flag on current calendar configuration rules
+                    if (year === config.activeYear) {
+                        option.selected = true;
+                    }
+                    yearDropdown.appendChild(option);
+                });
+                console.log(`>>> [UI COMPLETE] Dynamic Year Combobox populated with: [${config.years.join(', ')}].`);
+            }
+            
+            // 4. Proceed to fetch main user list rows once years are ready
+            fetchMasterQidDataMatrix();
+        })
+        .withFailureHandler(function(err) {
+            console.error(">>> [UI LIFECYCLE FAULT] Years inventory step bypassed due to error: ", err.message);
+            // Fallback strategy: Populate current calendar year as safety baseline and pass context
+            const yearDropdown = document.getElementById('qidFilterYear');
+            if (yearDropdown && yearDropdown.options.length <= 1) {
+                const fallbackYear = new Date().getFullYear().toString();
+                const option = document.createElement('option');
+                option.value = fallbackYear;
+                option.innerText = fallbackYear;
+                option.selected = true;
+                yearDropdown.appendChild(option);
+            }
+            fetchMasterQidDataMatrix();
+        })
+        .getDynamicQidYearsConfig(); // Runs Drive App lookup execution thread upstream
+}
+
+/**
+ * Isolated method handler to fetch raw QID record feeds from spreadsheet database
+ */
+function fetchMasterQidDataMatrix() {
+    google.script.run
+        .withSuccessHandler(function(records) {
+            globalQidDataStore = records || [];
+            activeSelectedSlNos = []; // Soft clear previous session selection vectors
+            filterQidRecords(); // Renders grid cards with local persistent filters applied
+        })
+        .withFailureHandler(function(err) {
+            document.getElementById('qidUserFeed').innerHTML = 
+                '<div class="col-12 alert alert-danger border-0 shadow-sm mx-2">Failed to load ID Records: ' + err.message + '</div>';
+        })
+        .fetchQidVerifiedRegistry();
+}
+
+
+/**
+ * FEATURE 1 ENGINE: Memory-retaining, search-resilient viewport reduction pipeline
+ */
+function filterQidRecords() {
+    console.log(">>> [FILTER PIPELINE] Re-evaluating dynamic search criteria fields...");
+    
+    const query = document.getElementById('qidSearchInput').value.toLowerCase().trim();
+    
+    // Direct checks to accommodate optional elements safely
+    const yearEl = document.getElementById('qidFilterYear');
+    const monthEl = document.getElementById('qidFilterMonth');
+    const targetYear = yearEl ? yearEl.value : "";
+    const targetMonth = monthEl ? monthEl.value : "";
+    
+    const filteredRecords = globalQidDataStore.filter((row) => {
+        // 1. Text Search Input Field Matching
+        const matchesText = !query || 
+                            (row.name || "").toLowerCase().includes(query) || 
+                            (row.phone || "").includes(query) || 
+                            (row.arrivingCity || "").toLowerCase().includes(query);
+                            
+        // 2. Timeline Metadata Array Evaluation
+        if (!row.timestamp) {
+            return matchesText && !targetYear && !targetMonth;
+        }
+        
+        const dateObj = new Date(row.timestamp);
+        const rowYear = dateObj.getFullYear().toString();
+        const rowMonth = dateObj.toLocaleString('en-US', { month: 'long' });
+        
+        const matchesYear = !targetYear || rowYear === targetYear;
+        const matchesMonth = !targetMonth || rowMonth === targetMonth;
+        
+        return matchesText && matchesYear && matchesMonth;
+    });
+    
+    console.log(`>>> [FILTER PIPELINE] View matches isolated: [${filteredRecords.length}] records found.`);
+    
+    // Dispatch calculations down to card UI engine
+    renderQidFeed(filteredRecords);
+    
+    // Keep header synchronization controls aligned with viewport state mutations
+    syncMasterCheckboxState();
+}
+
+
+/**
+ * Render Data Grid UI Cards optimized for Desktop Grid and Mobile Stacking
+ */
+function renderQidFeed(records) {
+    const feed = document.getElementById('qidUserFeed');
+    
+    const labelEl = document.getElementById('qidCountLabel');
+    if (labelEl) {
+        labelEl.innerText = records.length + " Profiles Verified Securely";
+    }
+    
+    if (records.length === 0) {
+        feed.innerHTML = '<div class="col-12 text-center py-5 text-muted small">No verified identity mappings discovered.</div>';
+        return;
+    }
+    
+    let html = '';
+    
+    records.forEach(function(user) {
+        let frontUrlHtml = user.frontUrl ? `<button type="button" onclick="launchSecureQidPreview('${user.frontUrl}')" class="btn btn-sm btn-light border d-flex align-items-center py-1 px-2 text-dark" style="border-radius:6px; font-size:11px;"><i class="bi bi-file-earmark-image me-1 text-primary"></i> ID Front</button>` : '';
+        let backUrlHtml = user.backUrl ? `<button type="button" onclick="launchSecureQidPreview('${user.backUrl}')" class="btn btn-sm btn-light border d-flex align-items-center py-1 px-2 text-dark" style="border-radius:6px; font-size:11px;"><i class="bi bi-file-earmark-image me-1 text-primary"></i> ID Back</button>` : '';
+        let selfieUrlHtml = user.selfieUrl ? `<button type="button" onclick="launchSecureQidPreview('${user.selfieUrl}')" class="btn btn-sm btn-light border d-flex align-items-center py-1 px-2 text-dark" style="border-radius:6px; font-size:11px;"><i class="bi bi-person-bounding-box me-1 text-success"></i> Selfie</button>` : '';
+
+        const searchText = (user.name + ' ' + user.phone + ' ' + (user.arrivingCity || '')).toLowerCase();
+        const initialLetter = user.idType ? user.idType.charAt(0) : 'ID';
+        const badgeClass = user.checkinStatus === 'Checked In' ? 'bg-success' : 'bg-secondary';
+        const safeNameEscaped = (user.name || '').replace(/'/g, "\\'");
+
+        // Rebind checked states matching the active selected cache
+        const isChecked = activeSelectedSlNos.includes(String(user.slNo)) ? 'checked' : '';
+
+        html += `
+        <div class="col-12 col-md-6 qid-user-card" data-search="${searchText}">
+            <div class="card h-100 border-0 shadow-sm p-3 position-relative bg-white" style="border-radius: 12px;">
+                
+                <div class="position-absolute" style="top: 15px; left: 14px; z-index: 10;">
+                    <input type="checkbox" class="form-check-input qid-row-checkbox shadow-none cursor-pointer border-secondary-subtle" 
+                           data-slno="${user.slNo}" ${isChecked} style="width: 17px; height: 17px;" onchange="handleSingleCheckboxChange(this)">
+                </div>
+
+                <div class="position-absolute top-0 end-0 mt-2 me-2" style="z-index: 10;">
+                    <button type="button" class="btn btn-link btn-sm p-1 text-muted me-1" onclick="actionModifyQidUser(${user.slNo})" title="Modify Record">
+                        <i class="bi bi-pencil fs-6 text-secondary"></i>
+                    </button>
+                    <button type="button" class="btn btn-link btn-sm p-1 text-muted" onclick="actionRemoveQidUser(${user.slNo}, '${safeNameEscaped}')" title="Delete Profile">
+                        <i class="bi bi-trash fs-6 text-danger"></i>
+                    </button>
+                </div>
+
+                <div class="d-flex align-items-start mb-2 ps-4" style="padding-right: 50px;">
+                    <div class="badge bg-success-subtle text-success rounded-circle p-2 me-2 mt-1 d-flex align-items-center justify-content-center" style="font-size: 11px; width:24px; height:24px; font-weight: 600;">
+                        ${initialLetter}
+                    </div>
+                    <div class="text-truncate">
+                        <h6 class="fw-bold text-dark mb-0 text-truncate" style="font-size: 14px;">${user.name}</h6>
+                        <small class="text-muted font-monospace" style="font-size: 11px;">${user.phone}</small>
+                    </div>
+                </div>
+
+                <div id="qidDetails_${user.slNo}" class="ps-4">
+                    <div class="row g-2 pt-2 border-top my-1 text-muted" style="font-size: 11.5px;">
+                        <div class="col-6"><strong>ID Details:</strong> <span class="text-dark">${user.idType || 'Govt'} (${user.idNo || '-'})</span></div>
+                        <div class="col-6"><strong>Origin City:</strong> <span class="text-dark">${user.arrivingCity || '-'}</span></div>
+                        <div class="col-6"><strong>Purpose:</strong> <span class="text-dark text-truncate d-block">${user.purpose || '-'}</span></div>
+                        <div class="col-6"><strong>Status:</strong> <span class="badge ${badgeClass} px-2 py-0.5" style="font-size:9px;">${user.checkinStatus || 'Pending'}</span></div>
+                        <div class="col-12 border-top pt-1 mt-1">
+                            <i class="bi bi-telephone-outbound text-warning me-1"></i><strong>SOS Contact:</strong> <span class="text-dark">${user.emergencyName || '-'} (${user.emergencyPhone || '-'})</span>
+                        </div>
+                        <div class="col-12 text-truncate" title="${user.address || '-'}">
+                            <i class="bi bi-geo-alt text-danger me-1"></i><strong>Address:</strong> <span class="text-dark">${user.address || '-'}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="d-flex flex-wrap gap-2 pt-2 mt-2 border-top justify-content-start ps-4">
+                    ${frontUrlHtml}
+                    ${backUrlHtml}
+                    ${selfieUrlHtml}
+                </div>
+            </div>
+        </div>`;
+    });
+    
+    feed.innerHTML = html;
+    evaluateQidSelectionState();
+}
+
+/**
+ * Handle state data alterations for single card checkbox interaction elements
+ */
+function handleSingleCheckboxChange(node) {
+    const targetSlNo = String(node.getAttribute('data-slno'));
+    if (node.checked) {
+        if (!activeSelectedSlNos.includes(targetSlNo)) {
+            activeSelectedSlNos.push(targetSlNo);
+        }
+    } else {
+        activeSelectedSlNos = activeSelectedSlNos.filter(id => id !== targetSlNo);
+    }
+    evaluateQidSelectionState();
+    syncMasterCheckboxState();
+}
+
+/**
+ * FEATURE 2 ENGINE: Toggles selection states ONLY for elements currently visible in view matrix
+ */
+function toggleAllQidCheckboxes(masterNode) {
+    const isChecked = masterNode.checked;
+    console.log(`>>> [SELECTION SYSTEM] Master toggle state changed to: [${isChecked}]`);
+    
+    // Find matching elements within active card wrapper nodes
+    const visibleCheckboxes = document.querySelectorAll('.qid-user-card .qid-row-checkbox');
+    
+    visibleCheckboxes.forEach(cb => {
+        cb.checked = isChecked;
+        const targetSlNo = String(cb.getAttribute('data-slno'));
+        
+        if (isChecked) {
+            if (!activeSelectedSlNos.includes(targetSlNo)) activeSelectedSlNos.push(targetSlNo);
+        } else {
+            activeSelectedSlNos = activeSelectedSlNos.filter(id => id !== targetSlNo);
+        }
+    });
+    
+    evaluateQidSelectionState();
+}
+
+/**
+ * FEATURE 2 ENGINE: Evaluates current checked counts and handles floating action bar shifts
+ */
+function evaluateQidSelectionState() {
+    const panel = document.getElementById('qidBatchActionPanel');
+    const countText = document.getElementById('qidSelectedCountText');
+    const totalCount = activeSelectedSlNos.length;
+    
+    if (totalCount > 0) {
+        if (countText) {
+            countText.innerText = `${totalCount} item${totalCount > 1 ? 's' : ''} selected for deletion`;
+        }
+        if (panel && panel.classList.contains('d-none')) {
+            panel.classList.remove('d-none');
+        }
+    } else {
+        if (panel && !panel.classList.contains('d-none')) {
+            panel.classList.add('d-none');
+        }
+        
+        const master = document.getElementById('qidMasterCheckbox');
+        if (master && master.checked) {
+            master.checked = false;
+        }
+    }
+}
+
+/**
+ * Synchronizes the state of the top master checkbox control using viewport parameters
+ */
+function syncMasterCheckboxState() {
+    const master = document.getElementById('qidMasterCheckbox');
+    if (!master) return;
+    
+    const visibleCheckboxes = document.querySelectorAll('.qid-user-card .qid-row-checkbox');
+    if (visibleCheckboxes.length === 0) {
+        master.checked = false;
+        return;
+    }
+    
+    const allVisibleChecked = Array.from(visibleCheckboxes).every(cb => cb.checked);
+    master.checked = allVisibleChecked;
+}
+
+/**
+ * FEATURE 2 ENGINE: Resets all checkboxes and safely retracts structural overlays
+ */
+function clearQidSelections() {
+    activeSelectedSlNos = [];
+    const checkboxes = document.querySelectorAll('.qid-row-checkbox');
+    checkboxes.forEach(cb => cb.checked = false);
+    
+    const master = document.getElementById('qidMasterCheckbox');
+    if (master) master.checked = false;
+    
+    evaluateQidSelectionState();
+}
+
+// =========================================================================
+// ACTION PROMPTS, MODIFICATIONS & BATCH DELETE EXECUTION ENGINES
+// =========================================================================
+
+/**
+ * Helper Utility to trigger highly customized professional confirmation/status alerts
+ */
+function showQidActionPrompt(options) {
+    const modalEl = document.getElementById('qidActionModal');
+    const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+    
+    // Inject Title & Subtext Details Safely
+    document.getElementById('qidActionTitle').innerText = options.title || "Confirm Action";
+    document.getElementById('qidActionMessage').innerText = options.message || "";
+    
+    // Set Theme Configurations (Danger/Warning/Success)
+    const iconContainer = document.getElementById('qidActionIconContainer');
+    const iconEl = document.getElementById('qidActionIcon');
+    const confirmBtn = document.getElementById('btnQidActionConfirm');
+    
+    // Clear old theme definitions
+    iconContainer.className = "mb-3 d-flex align-items-center justify-content-center mx-auto rounded-circle";
+    confirmBtn.className = "btn btn-sm text-white px-3 w-50";
+    
+    if (options.type === "danger") {
+        iconContainer.classList.add("bg-danger-subtle");
+        iconEl.className = "bi bi-exclamation-triangle text-danger fs-3";
+        confirmBtn.classList.add("bg-danger");
+    } else {
+        iconContainer.classList.add("bg-warning-subtle");
+        iconEl.className = "bi bi-question-circle text-warning fs-3";
+        confirmBtn.classList.add("bg-warning", "text-dark");
+    }
+    
+    // Set confirmation button action text labels
+    confirmBtn.innerText = options.confirmText || "Confirm";
+    
+    // Handle Event Execution Mapping Safely without memory leak piling
+    confirmBtn.onclick = function() {
+        modal.hide();
+        if (typeof options.onConfirm === "function") options.onConfirm();
+    };
+    
+    modal.show();
+}
+
+/**
+ * Modernized Delete Record Execution utilizing professional Bootstrap layouts
+ */
+function actionRemoveQidUser(slNo, name) {
+    showQidActionPrompt({
+        type: "danger",
+        title: "Delete Verified Profile?",
+        message: "Are you certain you want to permanently delete " + name + "'s verification history? This will purge their record inside your spreadsheet ledger maps instantly.",
+        confirmText: "Delete Record",
+        onConfirm: function() {
+            // Keep user context responsive by updating background container elements
+            document.getElementById('qidUserFeed').innerHTML = `
+                <div class="col-12 text-center py-5">
+                    <div class="spinner-border text-danger spinner-border-sm me-2" role="status"></div>
+                    <span class="text-danger small fw-medium">Purging profile from registry ledger...</span>
+                </div>`;
+                
+            google.script.run
+                .withSuccessHandler(function(response) {
+                    console.log(">>> [DELETE QID SUCCESS]", response);
+                    openQidHubModal(); 
+                })
+                .withFailureHandler(function(err) {
+                    showQidActionPrompt({
+                        type: "danger",
+                        title: "Operation Failed",
+                        message: "The deletion command dropped unexpectedly: " + err.message,
+                        confirmText: "Close"
+                    });
+                })
+                .deleteQidRowBackend(slNo);
+        }
+    });
+}
+
+/**
+ * Modernized Modifier Module: Opens the editing modal and auto-populates old data values
+ */
+function actionModifyQidUser(slNo) {
+    // Locate target profile within your local globally stored array matrix cache
+    const targetRecord = globalQidDataStore.find(function(u) { return parseInt(u.slNo) === parseInt(slNo); });
+    if (!targetRecord) {
+        alert("Unable to cross-reference file verification data.");
+        return;
+    }
+    
+    // Inject values securely into form elements
+    document.getElementById('editQidSlNo').value = targetRecord.slNo;
+    document.getElementById('editQidName').value = targetRecord.name || "";
+    document.getElementById('editQidDocNo').value = targetRecord.idNo || "";
+    
+    // Sanitize phone input formats automatically to match strict data protocols (+91 prefix removal)
+    let cleanPhoneDisplay = (targetRecord.phone || "").toString().replace(/^\+91/, "").replace(/\s+/g, "");
+    document.getElementById('editQidPhone').value = cleanPhoneDisplay;
+    
+    // Fire up the modal overlay element frame cleanly
+    const editModalEl = document.getElementById('qidEditUserModal');
+    bootstrap.Modal.getOrCreateInstance(editModalEl).show();
+}
+
+/**
+ * Serializes, sanitizes, and sends profile updates to the spreadsheet ledger
+ */
+function submitQidProfileEdits() {
+    const slNo = document.getElementById('editQidSlNo').value;
+    const rawName = document.getElementById('editQidName').value;
+    const rawPhone = document.getElementById('editQidPhone').value;
+    const rawDocNo = document.getElementById('editQidDocNo').value;
+    
+    // --- SYSTEM CORRECTION PRESETS: Strict normalization enforcement ---
+    // Instantly strip trailing spaces, +91 prefixes, and inner dashes
+    const sanitizedName = rawName.trim();
+    const sanitizedDocNo = rawDocNo.trim();
+    const sanitizedPhone = rawPhone.toString().replace(/^\+91/, "").replace(/[-\s()]+/g, "").trim();
+    
+    const saveButton = document.getElementById('btnQidEditSave');
+    saveButton.disabled = true;
+    saveButton.innerHTML = `<span class="spinner-border spinner-border-sm me-1" role="status"></span> Saving...`;
+    
+    // Fire network call upstream to modify backend data indexes
+    google.script.run
+        .withSuccessHandler(function(response) {
+            saveButton.disabled = false;
+            saveButton.innerText = "Save Changes";
+            
+            const editModalEl = document.getElementById('qidEditUserModal');
+            bootstrap.Modal.getOrCreateInstance(editModalEl).hide();
+            
+            console.log(">>> [UPDATE QID PROFILES COMPLETED]", response);
+            openQidHubModal(); 
+        })
+        .withFailureHandler(function(err) {
+            saveButton.disabled = false;
+            saveButton.innerText = "Save Changes";
+            
+            showQidActionPrompt({
+                type: "danger",
+                title: "Modification Aborted",
+                message: "Internal ledger synchronization failed: " + err.message,
+                confirmText: "Close"
+            });
+        })
+        .modifyQidRowBackend(slNo, { 
+            name: sanitizedName, 
+            phone: sanitizedPhone,
+            idNo: sanitizedDocNo
+        });
+}
+
+/**
+ * Intercept Google Drive URLs and pipe them directly into an in-app lightbox frame
+ */
+function launchSecureQidPreview(rawUrl) {
+    if (!rawUrl || rawUrl.trim() === "" || rawUrl.indexOf("-") === 0) {
+        alert("No valid media proof link attached to this validation profile.");
+        return;
+    }
+    
+    const previewModalEl = document.getElementById('qidPreviewModal');
+    const imageFrame = document.getElementById('qidPreviewImageFrame');
+    const spinner = document.getElementById('qidPreviewImageSpinner');
+    const modalInstance = bootstrap.Modal.getOrCreateInstance(previewModalEl);
+    
+    imageFrame.style.opacity = "0.0";
+    spinner.classList.remove('d-none');
+    modalInstance.show();
+    
+    google.script.run
+        .withSuccessHandler(function(base64DataStream) {
+            spinner.classList.add('d-none');
+            
+            if (!base64DataStream || base64DataStream === "ERROR") {
+                alert("Google Drive security layer blocked raw URL streaming. Please verify spreadsheet permissions.");
+                return;
+            }
+            
+            imageFrame.src = base64DataStream;
+            imageFrame.style.opacity = "1";
+        })
+        .withFailureHandler(function(err) {
+            spinner.classList.add('d-none');
+            imageFrame.style.opacity = "1";
+            alert("System Transmission Failure: " + err.message);
+        })
+        .getDriveImageAsBase64(rawUrl);
+}
+
+function actionPurgeGuestRecord(reservationId, name, checkInDate) {
+    showQidActionPrompt({
+        type: "danger",
+        title: "Delete Guest Ledger Entry?",
+        message: `Are you certain you want to permanently delete the entire reservation history for ${name} (${reservationId ? '#' + reservationId : 'checking in on ' + checkInDate})?`,
+        confirmText: "Delete Guest",
+        onConfirm: function() {
+            if (typeof toggleRefreshLoadingState === "function") {
+                toggleRefreshLoadingState(true);
+            }
+            
+            google.script.run
+              .withSuccessHandler(function(response) {
+                  console.log(">>> [DELETE ROW SUCCESS]", response);
+                  if (typeof loadDashboard === "function") {
+                      loadDashboard(true);  
+                  }
+              })
+              .withFailureHandler(function(err) {
+                  if (typeof toggleRefreshLoadingState === "function") {
+                      toggleRefreshLoadingState(false);
+                  }
+                  alert("Deletion Aborted: " + err.message);
+              })
+              // 🔑 Pass reservationId as 1st argument
+              .deleteGuestRowBackend(reservationId, name, checkInDate);
+        }
+    });
+}
+
+/**
+ * EXECUTION ENGINE: Upgraded to prevent animation/backdrop race conditions and handle multi-selections smoothly
+ */
+function triggerBatchDeleteQid() {
+    if (activeSelectedSlNos.length === 0) return;
+    
+    console.log(`>>> [DELETION PIPELINE] Initialized batch processing loop arrays for:`, activeSelectedSlNos);
+    
+    const hubModalEl = document.getElementById('qidHubModal');
+    const actionModalEl = document.getElementById('qidActionModal');
+    
+    const iconContainer = document.getElementById('qidActionIconContainer');
+    const icon = document.getElementById('qidActionIcon');
+    const title = document.getElementById('qidActionTitle');
+    const message = document.getElementById('qidActionMessage');
+    const confirmBtn = document.getElementById('btnQidActionConfirm');
+    
+    // Clean up event listeners on the confirmation button
+    const freshConfirmBtn = confirmBtn.cloneNode(true);
+    confirmBtn.parentNode.replaceChild(freshConfirmBtn, confirmBtn);
+    
+    // --- SETUP CONFIRMATION MODAL CONTENT DIRECTLY ---
+    title.innerText = "Confirm Batch Deletion";
+    message.innerHTML = `Are you sure you want to permanently delete all <strong>${activeSelectedSlNos.length} selected profiles</strong>?<br><span class="text-danger fw-medium">This will remove their data from the ledger and purge all associated images from Google Drive.</span>`;
+    
+    if (iconContainer) iconContainer.className = "mb-3 d-flex align-items-center justify-content-center mx-auto rounded-circle bg-danger-subtle text-danger";
+    if (icon) icon.className = "bi bi-exclamation-triangle-fill fs-3";
+    
+    freshConfirmBtn.className = "btn btn-sm btn-danger text-white px-3 w-50";
+    freshConfirmBtn.innerText = "Delete Records";
+    
+    // Handle the deletion processing loop
+    freshConfirmBtn.addEventListener('click', function() {
+        const totalItems = activeSelectedSlNos.length;
+        console.log(`>>> [DELETION PIPELINE] Batch execution confirmed for ${totalItems} items.`);
+        
+        // 1. Hide confirmation wrapper pop-up modal
+        let bsActionModal = bootstrap.Modal.getInstance(actionModalEl);
+        if (bsActionModal) bsActionModal.hide();
+        
+        // 2. Inject the inline spinner directly into the main QID Registry feed
+        const userFeedContainer = document.getElementById('qidUserFeed');
+        if (userFeedContainer) {
+            userFeedContainer.innerHTML = `
+                <div class="col-12 text-center py-5 animate__animated animate__fadeIn">
+                    <div class="spinner-border text-danger" role="status" style="width: 2.5rem; height: 2.5rem;"></div>
+                    <div class="mt-3 text-secondary fw-medium small">
+                        Permanently purging ${totalItems} secure registry profile(s)...
+                    </div>
+                    <div class="text-muted mt-1" style="font-size: 11px;">
+                        Updating cloud storage ledgers, please do not close this window.
+                    </div>
+                </div>
+            `;
+        }
+        
+        // Hide floating bottom action snackbar panel
+        const batchPanel = document.getElementById('qidBatchActionPanel');
+        if (batchPanel) batchPanel.style.display = 'none';
+        
+        // 3. Call Apps Script backend execution pipeline
+        google.script.run
+          .withSuccessHandler(function(response) {
+             console.log(">>> [SERVER API SUCCESS] Batch delete sweep finalized.");
+             
+             // Reset selections
+             if (typeof clearQidSelections === "function") clearQidSelections();
+             activeSelectedSlNos = [];
+             
+             const masterCheckbox = document.getElementById('qidMasterCheckbox');
+             if (masterCheckbox) masterCheckbox.checked = false;
+             
+             // Reload data grid seamlessly without flickering the parent modal
+             if (typeof fetchMasterQidDataMatrix === "function") {
+                 fetchMasterQidDataMatrix();
+             } else if (typeof refreshAllDashboardsAndRegistries === "function") {
+                 refreshAllDashboardsAndRegistries();
+             } else {
+                 openQidHubModal();
+             }
+          })
+          .withFailureHandler(function(err) {
+             console.error(">>> [SERVER API FAILURE] Transaction aborted:", err);
+             if (userFeedContainer) {
+                 userFeedContainer.innerHTML = `
+                     <div class="col-12 alert alert-danger border-0 shadow-sm mx-2">
+                         <i class="bi bi-exclamation-triangle-fill me-2"></i>
+                         <strong>Batch Deletion Failed:</strong> ${err.message}
+                     </div>
+                 `;
+             }
+           })
+          .deleteQidRowsBatchBackend(activeSelectedSlNos);
+    });
+
+    // --- EXECUTION STEP ---
+    // Do NOT hide hubModalEl anymore! Show actionModalEl stacked on top of it.
+    let modalInstance = bootstrap.Modal.getInstance(actionModalEl) || new bootstrap.Modal(actionModalEl);
+    modalInstance.show();
+}
+
+function triggerFloorAvailabilityCheck() {
+  const fromDate = document.getElementById('check-from-date').value;
+  const toDate = document.getElementById('check-to-date').value;
+  const statusContainer = document.getElementById('floor-status-container');
+  const btnText = document.getElementById('avail-btn-text');
+  const spinner = document.getElementById('avail-spinner');
+
+  if (!fromDate || !toDate) {
+    statusContainer.innerHTML = '<span class="text-warning small" style="font-size: 11px;"><i class="bi bi-exclamation-triangle me-1"></i>Select dates</span>';
+    return;
+  }
+
+  spinner.classList.remove('d-none');
+  btnText.innerText = "Checking...";
+  statusContainer.innerHTML = ''; 
+
+  google.script.run
+    .withSuccessHandler(function(statusMap) {
+      spinner.classList.add('d-none');
+      btnText.innerText = "Check Now";
+
+      // Dynamic theme injector based on computed smart status variants
+      const getBadge = (floorName, floorData) => {
+        let badgeClass = "";
+        let icon = "";
+        
+        if (floorData.status === "AVAILABLE") {
+          badgeClass = "bg-success-subtle text-success border border-success-subtle";
+          icon = "🌱";
+        } else if (floorData.status === "PARTIAL") {
+          badgeClass = "bg-warning-subtle text-warning-emphasis border border-warning-subtle";
+          icon = "⏳";
+        } else {
+          badgeClass = "bg-danger-subtle text-danger border border-danger-subtle";
+          icon = "🔒";
+        }
+
+        return `<span class="badge ${badgeClass} rounded-pill me-1" style="font-size: 11px; padding: 4px 10px;">${icon} ${floorName}: ${floorData.text}</span>`;
+      };
+
+      statusContainer.innerHTML = 
+        getBadge('Ground Floor', statusMap.ground) + 
+        getBadge('Second Floor', statusMap.second);
+    })
+    .withFailureHandler(function(err) {
+      spinner.classList.add('d-none');
+      btnText.innerText = "Check Now";
+      statusContainer.innerHTML = '<span class="text-danger small" style="font-size: 11px;"><i class="bi bi-exclamation-octagon me-1"></i>Error</span>';
+      console.error(err);
+    })
+    .checkFloorWiseAvailability(fromDate, toDate);
+}
+
+</script>
