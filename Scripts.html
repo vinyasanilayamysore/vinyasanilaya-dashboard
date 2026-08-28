@@ -1652,25 +1652,46 @@ function updateStorageMetricsUI() {
  * Logic to handle "Optimize Storage" - filtering for old years
  */
 function triggerStorageCleanupLogic() {
+   // Enter Selection Mode
+    isQidSelectionMode = true;
+    
+    // Show the "Select All" header
+    const masterCheck = document.getElementById('qidMasterCheckboxContainer');
+    if (masterCheck) masterCheck.classList.remove('qid-selection-element');
+
+    // Auto-apply Year Filter (Last Year)
     const currentYear = new Date().getFullYear();
     const legacyYear = (currentYear - 1).toString();
+    const yearFilter = document.getElementById('qidFilterYear');
+    if (yearFilter) {
+        yearFilter.value = legacyYear;
+    }
 
-    showQidActionPrompt({
-        type: "warning",
-        title: "Storage Optimization",
-        message: `Your storage is increasing. Would you like to auto-filter and review all records from ${legacyYear} and older for batch deletion?`,
-        confirmText: "Review Legacy Data",
-        onConfirm: function() {
-            const yearFilter = document.getElementById('qidFilterYear');
-            if (yearFilter) {
-                yearFilter.value = legacyYear;
-                filterQidRecords();
-                // Scroll to feed
-                document.getElementById('qidUserFeed').scrollIntoView({ behavior: 'smooth' });
-            }
-        }
-    });
+    // Refresh Feed to show checkboxes and filtered data
+    filterQidRecords();
+
+    // Show the bottom action panel with an instruction
+    const panel = document.getElementById('qidBatchActionPanel');
+    if (panel) {
+        panel.classList.remove('d-none');
+        document.getElementById('qidSelectedCountText').innerText = "Select records to delete...";
+    }
 }
+
+/**
+ * Exits the Optimization/Selection mode and restores clean UI
+ */
+function exitQidSelectionMode() {
+    isQidSelectionMode = false;
+    activeSelectedIds = [];
+    
+    const masterCheck = document.getElementById('qidMasterCheckboxContainer');
+    if (masterCheck) masterCheck.classList.add('qid-selection-element');
+    
+    filterQidRecords(); // Rerender to hide checkboxes
+    evaluateQidSelectionState(); // Hide bottom panel
+}
+
 
 /**
  * Isolated method handler to fetch raw Firestore guest records
@@ -1911,13 +1932,8 @@ function syncMasterCheckboxState() {
  * FEATURE 2 ENGINE: Resets all checkboxes and safely retracts structural overlays
  */
 function clearQidSelections() {
-    activeSelectedIds = [];
-    const checkboxes = document.querySelectorAll('.qid-row-checkbox');
-    checkboxes.forEach(cb => cb.checked = false);
-    
-    const master = document.getElementById('qidMasterCheckbox');
-    if (master) master.checked = false;
-    
+    // Instead of just clearing IDs, we exit the special mode entirely
+    exitQidSelectionMode();
     evaluateQidSelectionState();
 }
 
@@ -2017,10 +2033,15 @@ function actionModifyQidUser(id) {
     document.getElementById('editQidId').value = targetRecord.id;
     document.getElementById('editQidName').value = targetRecord.name || "";
     document.getElementById('editQidDocNo').value = targetRecord.idNo || "";
+    document.getElementById('editQidAddress').value = targetRecord.address || "";
+    document.getElementById('editQidEmergencyName').value = targetRecord.emergencyName || "";
     
     // Sanitize phone input formats automatically to match strict data protocols (+91 prefix removal)
     let cleanPhoneDisplay = (targetRecord.phone || "").toString().replace(/^\+91/, "").replace(/\s+/g, "");
     document.getElementById('editQidPhone').value = cleanPhoneDisplay;
+
+    let cleanEmergPhoneDisplay = (targetRecord.emergencyPhone || "").toString().replace(/^\+91/, "").replace(/\s+/g, "");
+    document.getElementById('editQidEmergencyPhone').value = cleanEmergPhoneDisplay;
     
     // Fire up the modal overlay element frame cleanly
     const editModalEl = document.getElementById('qidEditUserModal');
@@ -2035,12 +2056,18 @@ function submitQidProfileEdits() {
     const rawName = document.getElementById('editQidName').value;
     const rawPhone = document.getElementById('editQidPhone').value;
     const rawDocNo = document.getElementById('editQidDocNo').value;
+    const rawAddress = document.getElementById('editQidAddress').value;
+    const rawEmergName = document.getElementById('editQidEmergencyName').value;
+    const rawEmergPhone = document.getElementById('editQidEmergencyPhone').value;
     
     // --- SYSTEM CORRECTION PRESETS: Strict normalization enforcement ---
     // Instantly strip trailing spaces, +91 prefixes, and inner dashes
     const sanitizedName = rawName.trim();
     const sanitizedDocNo = rawDocNo.trim();
+    const sanitizedAddress = rawAddress.trim();
+    const sanitizedEmergName = rawEmergName.trim();
     const sanitizedPhone = rawPhone.toString().replace(/^\+91/, "").replace(/[-\s()]+/g, "").trim();
+    const sanitizedEmergPhone = rawEmergPhone.toString().replace(/^\+91/, "").replace(/[-\s()]+/g, "").trim();
     
     const saveButton = document.getElementById('btnQidEditSave');
     saveButton.disabled = true;
@@ -2072,7 +2099,10 @@ function submitQidProfileEdits() {
         .updateFirestoreGuestRecord(docId, { 
             name: sanitizedName, 
             phone: sanitizedPhone,
-            idNo: sanitizedDocNo
+            idNo: sanitizedDocNo,
+            address: sanitizedAddress,
+            emergencyName: sanitizedEmergName,
+            emergencyPhone: sanitizedEmergPhone
         });
 }
 

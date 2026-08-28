@@ -474,7 +474,7 @@
             <div class="col-12 px-2">
               <div class="single-line-filter-container">
 
-                <div class="compact-checkbox-wrapper me-1">
+                <div class="compact-checkbox-wrapper me-1 qid-selection-element" id="qidMasterCheckboxContainer">
                   <div class="form-check d-flex align-items-center m-0" style="min-height: 34px;">
                     <input type="checkbox" id="qidMasterCheckbox" class="form-check-input shadow-none cursor-pointer border-secondary-subtle m-0" style="width: 16px; height: 16px;" onchange="toggleAllQidCheckboxes(this)">
                     <label class="form-check-label text-muted small fw-medium ms-1 cursor-pointer unselectable" for="qidMasterCheckbox" style="font-size: 12px; white-space: nowrap;">Select All</label>
@@ -602,6 +602,20 @@
             <div class="mb-4">
               <label for="editQidDocNo" class="form-label text-muted small fw-medium mb-1">Government ID Identifier</label>
               <input type="text" class="form-control form-control-sm border shadow-none" id="editQidDocNo" required style="border-radius: 8px; height: 38px; font-weight: 500;">
+            </div>
+            <div class="mb-3">
+              <label for="editQidAddress" class="form-label text-muted small fw-medium mb-1">Residential Address</label>
+              <textarea class="form-control form-control-sm border shadow-none" id="editQidAddress" rows="2" style="border-radius: 8px; font-size: 13px;"></textarea>
+            </div>
+            <div class="row g-2 mb-4">
+              <div class="col-6">
+                <label for="editQidEmergencyName" class="form-label text-muted small fw-medium mb-1">Emergency Name</label>
+                <input type="text" class="form-control form-control-sm border shadow-none" id="editQidEmergencyName" style="border-radius: 8px; height: 38px; font-size: 13px;">
+              </div>
+              <div class="col-6">
+                <label for="editQidEmergencyPhone" class="form-label text-muted small fw-medium mb-1">Emergency Phone</label>
+                <input type="text" class="form-control form-control-sm border shadow-none" id="editQidEmergencyPhone" style="border-radius: 8px; height: 38px; font-size: 13px;">
+              </div>
             </div>
             <div class="d-flex gap-2 pt-2">
               <button type="button" class="btn btn-light btn-sm border px-3 w-50" data-bs-dismiss="modal" style="border-radius: 8px; font-weight: 500; height: 38px;">Cancel</button>

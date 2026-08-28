@@ -1318,8 +1318,20 @@ function getFirebaseStorageImage(rawUrl) {
  */
 function updateFirestoreGuestRecord(docId, updates) {
   try {
-    // Correcting updateMask to target nested fields: guestDetails.name, guestDetails.phone, verification.idNo
-    const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/guests/${docId}?updateMask.fieldPaths=guestDetails.name&updateMask.fieldPaths=guestDetails.phone&updateMask.fieldPaths=verification.idNo`;
+    // Define all nested field paths that need to be updated.
+    // Dots represent nesting within Firestore maps.
+    const mask = [
+      'updateMask.fieldPaths=guestDetails.name',
+      'updateMask.fieldPaths=guestDetails.phone',
+      'updateMask.fieldPaths=verification.idNo',
+      'updateMask.fieldPaths=travelDetails.arrivingCity',
+      'updateMask.fieldPaths=travelDetails.address',
+      'updateMask.fieldPaths=emergencyContact.name',
+      'updateMask.fieldPaths=emergencyContact.phone'
+    ].join('&');
+
+    const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/guests/${docId}?${mask}`;
+
     const payload = {
       fields: {
         guestDetails: {
@@ -1332,6 +1344,20 @@ function updateFirestoreGuestRecord(docId, updates) {
         },
         verification: {
           mapValue: { fields: { idNo: { stringValue: updates.idNo } } }
+        },
+        travelDetails: {
+          mapValue: { fields: { 
+            arrivingCity: { stringValue: updates.address },
+            address: { stringValue: updates.address }
+          } }
+        },
+        emergencyContact: {
+          mapValue: {
+            fields: {
+              name: { stringValue: updates.emergencyName },
+              phone: { stringValue: updates.emergencyPhone }
+            }
+          }
         }
       }
     };
