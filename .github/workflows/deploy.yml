@@ -4,9 +4,10 @@ on:
   push:
     branches:
       - main
+      - featuresBugFixes
 
 jobs:
-  deploy:
+  test-stage:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repo
@@ -21,16 +22,141 @@ jobs:
         run: npm install -g @google/clasp
 
       - name: Create Authentication File
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
         run: |
-          if [ -z "${{ secrets.CLASPRC_JSON }}" ]; then
+          if [ -z "$CLASPRC_JSON" ]; then
             echo "Error: CLASPRC_JSON secret is empty or not set in GitHub Secrets."
             exit 1
           fi
-          echo '${{ secrets.CLASPRC_JSON }}' > ~/.clasprc.json
-          chmod 600 ~/.clasprc.json
+          node << 'EOF'
+            try {
+              let data = process.env.CLASPRC_JSON.trim();
+              if (data.startsWith('"') && data.endsWith('"')) {
+                data = data.substring(1, data.length - 1).replace(/\\"/g, '"');
+              }
+              const parsed = JSON.parse(data);
+              const fs = require('fs');
+              const path = require('path');
+              fs.writeFileSync(path.join(process.env.HOME, '.clasprc.json'), JSON.stringify(parsed));
+            } catch (e) {
+              console.error('Error parsing CLASPRC_JSON: ' + e.message);
+              process.exit(1);
+            }
+          EOF
+          chmod 600 "$HOME/.clasprc.json"
 
-      - name: Push to Apps Script
+      - name: Create Project Settings
+        env:
+          SCRIPT_ID: ${{ secrets.SCRIPT_ID }}
+        run: |
+          if [ -z "$SCRIPT_ID" ]; then
+            echo "Error: SCRIPT_ID secret is empty or not set in GitHub Secrets."
+            exit 1
+          fi
+          node -e "
+            const fs = require('fs');
+            const config = {
+              scriptId: process.env.SCRIPT_ID,
+              rootDir: '.'
+            };
+            fs.writeFileSync('.clasp.json', JSON.stringify(config));
+          "
+
+      - name: Push to Apps Script (@HEAD)
         run: clasp push --force
 
-      - name: Update Existing Deployment
-        run: clasp deploy -i ${{ secrets.DEPLOYMENT_ID }} --description "Automated update from GitHub Actions"
+      - name: Output Head Test Deployment URL
+        id: clasp_test
+        env:
+          HEAD_DEPLOYMENT_ID: ${{ vars.HEAD_DEPLOYMENT_ID }}
+        run: |
+          if [ -z "$HEAD_DEPLOYMENT_ID" ]; then
+            echo "❌ Error: HEAD_DEPLOYMENT_ID variable is missing in GitHub Settings."
+            exit 1
+          fi
+          
+          # Using the /dev endpoint for Head deployment testing
+          TEST_URL="https://script.google.com/macros/s/$HEAD_DEPLOYMENT_ID/dev"
+          echo "test_url=$TEST_URL" >> $GITHUB_OUTPUT
+          
+          echo "Head Test Deployment URL: $TEST_URL"
+          echo "### Head Test Deployment URL (HEAD) 🧪" >> $GITHUB_STEP_SUMMARY
+          echo "Your latest commit code is pushed to @HEAD. Test your changes here:" >> $GITHUB_STEP_SUMMARY
+          echo "**[Click here to open Test App (Dev Mode)]($TEST_URL)**" >> $GITHUB_STEP_SUMMARY
+
+  production-deploy:
+    needs: test-stage
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Clasp
+        run: npm install -g @google/clasp
+
+      - name: Create Authentication File
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          if [ -z "$CLASPRC_JSON" ]; then
+            echo "Error: CLASPRC_JSON secret is empty or not set in GitHub Secrets."
+            exit 1
+          fi
+          node << 'EOF'
+            try {
+              let data = process.env.CLASPRC_JSON.trim();
+              if (data.startsWith('"') && data.endsWith('"')) {
+                data = data.substring(1, data.length - 1).replace(/\\"/g, '"');
+              }
+              const parsed = JSON.parse(data);
+              const fs = require('fs');
+              const path = require('path');
+              fs.writeFileSync(path.join(process.env.HOME, '.clasprc.json'), JSON.stringify(parsed));
+            } catch (e) {
+              console.error('Error parsing CLASPRC_JSON: ' + e.message);
+              process.exit(1);
+            }
+          EOF
+          chmod 600 "$HOME/.clasprc.json"
+
+      - name: Push Code to Script
+        run: clasp push --force
+
+      - name: Create Project Settings
+        env:
+          SCRIPT_ID: ${{ secrets.SCRIPT_ID }}
+        run: |
+          node -e "
+            const fs = require('fs');
+            const config = {
+              scriptId: process.env.SCRIPT_ID,
+              rootDir: '.'
+            };
+            fs.writeFileSync('.clasp.json', JSON.stringify(config));
+          "
+
+      - name: Deploy New Version to Production
+        env:
+          DEPLOYMENT_ID: ${{ vars.DEPLOYMENT_ID }}
+        run: |
+          if [ -z "${DEPLOYMENT_ID}" ]; then
+            echo "❌ Error: DEPLOYMENT_ID variable is missing. Go to Settings > Environments > production to add it."
+            exit 1
+          fi
+          # Updates existing production deployment ID with a newly created version snapshot
+          clasp deploy -i "$DEPLOYMENT_ID" --description "Production Release: ${{ github.sha }}"
+
+      - name: Final Success Notification
+        env:
+          DEPLOYMENT_ID: ${{ vars.DEPLOYMENT_ID }}
+        run: |
+          PROD_URL="https://script.google.com/macros/s/$DEPLOYMENT_ID/exec"
+          echo "### Production Deployment Successful! ✅" >> $GITHUB_STEP_SUMMARY
+          echo "Live Production URL: $PROD_URL" >> $GITHUB_STEP_SUMMARY

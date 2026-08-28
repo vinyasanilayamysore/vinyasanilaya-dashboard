@@ -1,5 +1,6 @@
 var ID_GUESTS_LIST = "1Puw0OezY18OWFt8wtwzv5BFxcJw314Hfov5GZMUXCbk";
-var ID_QID_VERIFIED_LIST = "1cmRFirWeg_tHFbZ9VS-E0Gz80SHHSsIU9lu5jV_GBKk";
+
+var FIREBASE_PROJECT_ID = "vinyasanilaya-website"; // Replace with your Project ID
 
 function doGet() {
   return HtmlService.createTemplateFromFile('Index')
@@ -94,25 +95,30 @@ function getDashboardData(filterYear, filterMonth) {
     // =========================================================================
     // REQUIRED SPEED CHANGE 1: PRE-FETCH ALL VERIFIED NUMBERS IN ONE ROUND-TRIP
     // =========================================================================
+    // Now fetching from Firestore 'guests' collection instead of Spreadsheet
     let verifiedMobilesSet = new Set();
     try {
-      const qidSpreadsheet = SpreadsheetApp.openById(ID_QID_VERIFIED_LIST);
-      const verificationSheet = qidSpreadsheet.getSheetByName(SHEET_NAME_QID);
+      const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/guests`;
+      const response = UrlFetchApp.fetch(url, {
+        headers: { "Authorization": "Bearer " + ScriptApp.getOAuthToken() }
+      });
+      const firestoreData = JSON.parse(response.getContentText());
 
-      if (verificationSheet) {
-        const verData = verificationSheet.getDataRange().getValues();
-        const PHONE_COL_INDEX = 5; // Matches Column 6 (Phone / Whatsapp) from your registry
+      if (firestoreData.documents) {
+        firestoreData.documents.forEach(doc => {
+          const fields = doc.fields;
+          // Accessing nested guestDetails.phone from Firestore REST structure
+          let phone = "";
+          if (fields.guestDetails && fields.guestDetails.mapValue.fields.phone) {
+            phone = fields.guestDetails.mapValue.fields.phone.stringValue;
+          } else if (fields.phone) { phone = fields.phone.stringValue; }
 
-        for (let i = 1; i < verData.length; i++) {
-          let cellVal = verData[i][PHONE_COL_INDEX];
-          if (cellVal) {
-            let cleanVerMobile = cellVal.toString().replace(/\D/g, "");
-            if (cleanVerMobile.length > 10) cleanVerMobile = cleanVerMobile.slice(-10);
-            if (cleanVerMobile.length === 10) {
-              verifiedMobilesSet.add(cleanVerMobile); // Stored in ultrafast RAM cache
-            }
+          if (phone) {
+            let clean = phone.replace(/\D/g, "");
+            if (clean.length > 10) clean = clean.slice(-10);
+            if (clean.length === 10) verifiedMobilesSet.add(clean);
           }
-        }
+        });
       }
     } catch (qidErr) {
       console.error(">>> [SPEED ENGINE WARNING] Cache pre-fetch failed: " + qidErr.message);
@@ -248,52 +254,36 @@ function getDashboardData(filterYear, filterMonth) {
 }
 
 /**
- * Verifies if a specific WhatsApp/Mobile number exists in the Master QID Verified registry.
- * Normalizes both inputs to ensure accurate 10-digit matching (ignoring prefixes like +91).
- * * @param {string|number} whatsappNo - The guest mobile number to look up.
- * @return {boolean} True if verified in the master ledger, false otherwise.
+ * Verifies if a specific WhatsApp/Mobile number exists in the Firestore 'guests' collection.
  */
 function findGuestQIDVerified(whatsappNo) {
   if (!whatsappNo) return false;
-
   try {
-    // 1. Normalize target number to raw last 10 digits
     let targetClean = whatsappNo.toString().replace(/\D/g, "");
     if (targetClean.length > 10) targetClean = targetClean.slice(-10);
-    if (targetClean.length !== 10) return false; // Guard clause against invalid structures
+    if (targetClean.length !== 10) return false;
 
-    // 2. Access the Master QID Document
-    const ss = SpreadsheetApp.openById(ID_QID_VERIFIED_LIST);
-    const sheet = ss.getSheetByName(SHEET_NAME_QID);
+    const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/guests`;
+    const response = UrlFetchApp.fetch(url, {
+      headers: { "Authorization": "Bearer " + ScriptApp.getOAuthToken() }
+    });
+    const firestoreData = JSON.parse(response.getContentText());
 
-    if (!sheet) {
-      console.error(`>>> ❌ [QID LOOKUP ERROR] Tab "${SHEET_NAME_QID}" not found.`);
-      return false;
-    }
+    if (firestoreData.documents) {
+      for (let doc of firestoreData.documents) {
+        let phone = "";
+        if (doc.fields.guestDetails && doc.fields.guestDetails.mapValue.fields.phone) {
+          phone = doc.fields.guestDetails.mapValue.fields.phone.stringValue;
+        } else if (doc.fields.phone) { phone = doc.fields.phone.stringValue; }
 
-    const lastRow = sheet.getLastRow();
-    if (lastRow <= 1) return false; // Empty sheet check
-
-    // 3. Extract data range (starting from row 2 to bypass headers)
-    const data = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
-
-    // Column Index 5 corresponds to Column 6 (Phone / Whatsapp) in your registry sheet mapping
-    const PHONE_COL_INDEX = 5;
-
-    // 4. Scan column for a sanitized match
-    for (let i = 0; i < data.length; i++) {
-      let cellVal = data[i][PHONE_COL_INDEX];
-      if (cellVal) {
-        let currentClean = cellVal.toString().replace(/\D/g, "");
+        let currentClean = phone.replace(/\D/g, "");
         if (currentClean.length > 10) currentClean = currentClean.slice(-10);
-
         if (currentClean === targetClean) {
-          console.log(`>>> 🎯 [QID MATCH FOUND] Verified number match at registry index row: ${i + 2}`);
-          return true; // Match found instantly, break loop early
+          console.log(`>>> 🎯 [FIRESTORE MATCH FOUND] ${targetClean}`);
+          return true;
         }
       }
     }
-
     return false; // No matches found across the iteration feed
 
   } catch (err) {
@@ -1211,265 +1201,182 @@ function parseDateSecurely(dateVal) {
   return null;
 }
 
-/**** QID Verified modal ****/
-// Ensure this constant matches your application constants at the top of Code.gs
-const SHEET_NAME_QID = 'QID-Verified';
+/***************************************************************************
+ * FIRESTORE REGISTRY CORE MODULE
+ ***************************************************************************/
 
 /**
- * Pull, serialize, and diagnose raw database matrix rows from the verified QID spreadsheet layout
+ * Fetch verified guests from Firestore collection 'guests'
  */
-function fetchQidVerifiedRegistry() {
-  // console.log("=======================================================");
-  // console.log(">>> 🔍 [QID DIAGNOSTIC START] Initializing Registry Engine...");
-  // console.log("=======================================================");
-
+function fetchFirestoreGuestsRegistry() {
   try {
-    const ss = SpreadsheetApp.openById(ID_QID_VERIFIED_LIST);
-    // console.log(">>> [DIAGNOSTIC] Active Spreadsheet Name: " + ss.getName());
-    // console.log(">>> [DIAGNOSTIC] Active Spreadsheet ID: " + ss.getId());
+    const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/guests`;
+    const response = UrlFetchApp.fetch(url, {
+      headers: { "Authorization": "Bearer " + ScriptApp.getOAuthToken() }
+    });
+    const result = JSON.parse(response.getContentText());
+    
+    if (!result.documents) return [];
 
-    const sheet = ss.getSheetByName(SHEET_NAME_QID);
-
-    if (!sheet) {
-      // console.error(">>> ❌ [DIAGNOSTIC ERROR] Could not locate sheet tab named precisely: '" + SHEET_NAME_QID + "'");
-      const sheets = ss.getSheets();
-      let sheetNames = sheets.map(function (s) { return "'" + s.getName() + "'"; }).join(", ");
-      // console.log(">>> [DIAGNOSTIC] Available tabs in this file are: [" + sheetNames + "]");
-      return [];
-    }
-
-    const lastRow = sheet.getLastRow();
-    const lastCol = sheet.getLastColumn();
-    //console.log(`>>> 📊 [DIAGNOSTIC] Target Sheet Found! Dimensions: [Rows: ${lastRow} | Columns: ${lastCol}]`);
-
-    if (lastRow <= 1) {
-      // console.warn(">>> ⚠️ [DIAGNOSTIC WARN] Sheet exists but appears to have NO data rows below the header.");
-      return [];
-    }
-
-    const values = sheet.getDataRange().getValues();
-    const headers = values[0];
-    //console.log(">>> 📋 [DIAGNOSTIC] Raw Headers Discovered: " + JSON.stringify(headers));
-
-    let serializedRecords = [];
-    let blankNameCount = 0;
-
-    for (let i = 1; i < values.length; i++) {
-      const row = values[i];
-      const rawName = row[4]; // Col 5: Name
-
-      if (i <= 3) {
-        //console.log(`>>> 🔍 [ROW ${i+1} SAMPLE] Raw Array Data: ` + JSON.stringify(row));
-        console.log(`>>> [ROW ${i + 1} SAMPLE] Extracted Name field (Index 4): "${rawName}"`);
-      }
-
-      if (!rawName || rawName.toString().trim() === "") {
-        blankNameCount++;
-        continue;
-      }
-
-      // --- CRITICAL NETWORK SERIALIZATION FIX ---
-      // Converts raw JavaScript Date Objects to an ISO String to prevent network transfer dropping
-      let safeTimestamp = "";
-      if (row[1]) {
-        safeTimestamp = (row[1] instanceof Date) ? row[1].toISOString() : row[1].toString();
-      }
-
-      serializedRecords.push({
-        slNo: row[0],                                   // Col 1: SlNo
-        timestamp: safeTimestamp,                       // Col 2: Timestamp
-        idType: row[2] || "Govt ID",                    // Col 3: ID Type
-        idNo: row[3] || "-",                            // Col 4: ID No
-        name: rawName.toString().trim(),                // Col 5: Name
-        phone: row[5] ? row[5].toString().trim() : "-", // Col 6: Phone / Whatsapp
-        purpose: row[6] || "-",                         // Col 7: Purpose Of Travel
-        arrivingCity: row[7] || "-",                    // Col 8: Ariving City
-        emergencyName: row[8] || "-",                   // Col 9: Emergency Contact Name
-        emergencyPhone: row[9] || "-",                  // Col 10: Emergency Contant No
-        frontUrl: row[10] || "",                        // Col 11: Govt-ID-Front URL
-        backUrl: row[11] || "",                         // Col 12: Govt-ID-Back URL
-        selfieUrl: row[12] || "",                       // Col 14: Selfie URL (Index 13 matches your update logic)
-        checkinStatus: row[13] || "Verified",           // Col 13: Checkin status (Index 12)
-        address: row[14] || "-"                         // Col 15: Address
-      });
-
-    }
-
-
-    // console.log(`=======================================================`);
-    // console.log(`>>> 🏁 [QID DIAGNOSTIC END] Successfully parsed: [${serializedRecords.length}] records.`);
-    // console.log(`>>> [DIAGNOSTIC] Skipped [${blankNameCount}] rows due to empty Name fields.`);
-    // console.log(`=======================================================`);
-
-    return serializedRecords.reverse();
-
+    return result.documents.map(doc => {
+      const f = doc.fields;
+      const docId = doc.name.split('/').pop();
+      
+      // Mapping nested fields to match the finalSubmit payload structure
+      return {
+        id: docId,
+        timestamp: f.createdAt ? f.createdAt.timestampValue : (f.timestamp ? f.timestamp.timestampValue : ""),
+        name: (f.guestDetails && f.guestDetails.mapValue.fields.name) ? f.guestDetails.mapValue.fields.name.stringValue : "Unknown",
+        phone: (f.guestDetails && f.guestDetails.mapValue.fields.phone) ? f.guestDetails.mapValue.fields.phone.stringValue : "-",
+        idType: (f.verification && f.verification.mapValue.fields.idType) ? f.verification.mapValue.fields.idType.stringValue : "Govt ID",
+        idNo: (f.verification && f.verification.mapValue.fields.idNo) ? f.verification.mapValue.fields.idNo.stringValue : "-",
+        frontUrl: (f.verification && f.verification.mapValue.fields.idFrontUrl) ? f.verification.mapValue.fields.idFrontUrl.stringValue : "",
+        backUrl: (f.verification && f.verification.mapValue.fields.idBackUrl) ? f.verification.mapValue.fields.idBackUrl.stringValue : "",
+        arrivingCity: (f.travelDetails && f.travelDetails.mapValue.fields.arrivingCity) ? f.travelDetails.mapValue.fields.arrivingCity.stringValue : "-",
+        purpose: (f.travelDetails && f.travelDetails.mapValue.fields.purpose) ? f.travelDetails.mapValue.fields.purpose.stringValue : "-",
+        emergencyName: (f.emergencyContact && f.emergencyContact.mapValue.fields.name) ? f.emergencyContact.mapValue.fields.name.stringValue : "-",
+        emergencyPhone: (f.emergencyContact && f.emergencyContact.mapValue.fields.phone) ? f.emergencyContact.mapValue.fields.phone.stringValue : "-",
+        selfieUrl: f.selfieUrl ? f.selfieUrl.stringValue : "",
+        checkinStatus: f.verifiedStatus ? f.verifiedStatus.stringValue : "Verified",
+        address: (f.travelDetails && f.travelDetails.mapValue.fields.arrivingCity) ? f.travelDetails.mapValue.fields.arrivingCity.stringValue : "-"
+      };
+    }).sort((a, b) => {
+      // Client-side sort to mirror orderBy("createdAt", "desc")
+      const dateA = new Date(a.timestamp || 0);
+      const dateB = new Date(b.timestamp || 0);
+      return dateB - dateA;
+    });
   } catch (err) {
-    console.error(">>> ❌ [DIAGNOSTIC CRITICAL EXCEPTION]", err);
+    console.error("Firestore fetch error: ", err);
     throw new Error(err.message);
   }
 }
 
 /**
- * Delete a QID entry safely by anchoring to its unique sequential Serial Number
+ * Delete Firestore guest record by Document ID
  */
-function deleteQidRowBackend(slNo) {
+function deleteFirestoreGuestRecord(docId) {
   try {
-    // --- FIX: Switch from getActiveSpreadsheet to explicit ID matching ---
-    const ss = SpreadsheetApp.openById(ID_QID_VERIFIED_LIST);
-    const sheet = ss.getSheetByName(SHEET_NAME_QID);
+    const docUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/guests/${docId}`;
+    
+    // 1. Fetch the document to get image references BEFORE deletion
+    const response = UrlFetchApp.fetch(docUrl, {
+      headers: { "Authorization": "Bearer " + ScriptApp.getOAuthToken() }
+    });
+    const doc = JSON.parse(response.getContentText());
+    const f = doc.fields;
 
-    if (!sheet) {
-      throw new Error("Target ledger sheet configuration '" + SHEET_NAME_QID + "' not found.");
-    }
+    // 2. Identify potential storage assets based on your schema
+    const assets = [];
+    if (f.verification && f.verification.mapValue && f.verification.mapValue.fields.idFrontUrl) assets.push(f.verification.mapValue.fields.idFrontUrl.stringValue);
+    if (f.verification && f.verification.mapValue && f.verification.mapValue.fields.idBackUrl) assets.push(f.verification.mapValue.fields.idBackUrl.stringValue);
+    if (f.selfieUrl) assets.push(f.selfieUrl.stringValue);
 
-    const values = sheet.getDataRange().getValues();
-
-    for (let i = 1; i < values.length; i++) {
-      // Column A contains the SlNo map index
-      if (parseInt(values[i][0]) === parseInt(slNo)) {
-        const actualRowInSheet = i + 1;
-        const targetRowData = values[i];
-
-        // Extract URLs from indices 10, 11, and 12
-        const frontUrl = targetRowData[10] || "";
-        const backUrl = targetRowData[11] || "";
-        const selfieUrl = targetRowData[12] || "";
-
-        const filesToPurge = [frontUrl, backUrl, selfieUrl];
-        let fileDeleteCount = 0;
-
-        filesToPurge.forEach(url => {
-          if (url && url.toString().trim() !== "") {
-            // Call the robust extractor helper defined below
-            const fileId = extractDriveIdSafely(url.toString().trim());
-
-            if (fileId) {
-              try {
-                const file = DriveApp.getFileById(fileId);
-                file.setTrashed(true);
-                fileDeleteCount++;
-                console.log(`>>> [STORAGE PURGE] Trashed associated Drive File ID: [${fileId}]`);
-              } catch (fileErr) {
-                console.warn(`>>> [STORAGE PURGE WARNING] File ID [${fileId}] could not be found or was already removed: ${fileErr.message}`);
-              }
-            }
-          }
-        });
-
-        console.log(`>>> [STORAGE PURGE COMPLETE] Total asset objects moved to trash bin: [${fileDeleteCount}]`);
-
-        // Delete the ledger row matrix completely from the spreadsheet
-        sheet.deleteRow(actualRowInSheet);
-        SpreadsheetApp.flush();
-        console.log(">>> [BACKEND DELETE SUCCESS] Removed SlNo [" + slNo + "] at Sheet Row [" + actualRowInSheet + "]");
-        return "SUCCESS";
+    // 3. Attempt to delete files from Firebase Storage
+    assets.forEach(url => {
+      if (url && url.startsWith('http')) {
+        try {
+          deleteFileFromFirebaseStorage(url);
+        } catch (storageErr) {
+          console.warn(`[STORAGE CLEANUP] Could not delete asset ${url}: ${storageErr.message}`);
+        }
       }
-    }
-    throw new Error("Record with Serial Number " + slNo + " was not found inside the ledger matrix.");
+    });
+
+    // 4. Finally, delete the Firestore metadata record
+    UrlFetchApp.fetch(docUrl, {
+      method: "delete",
+      headers: { "Authorization": "Bearer " + ScriptApp.getOAuthToken() }
+    });
+
+    return "SUCCESS";
   } catch (err) {
-    console.error(">>> [DELETE QID BACKEND CRITICAL ERROR]", err);
+    console.error("Firestore delete error: ", err);
     throw new Error(err.message);
   }
 }
 
 /**
- * Robust helper function to extract a 33-character Google Drive File ID 
- * from various standard Google Drive link formats.
+ * Fetch Firebase Storage asset and proxy to Base64
  */
-function extractDriveIdSafely(url) {
-  if (!url) return null;
-
-  // Pattern 1: Look for standard /file/d/{ID}/view formats
-  if (url.includes("/file/d/")) {
-    const parts = url.split("/file/d/");
-    if (parts.length > 1) {
-      return parts[1].split("/")[0];
-    }
-  }
-
-  // Pattern 2: Look for query parameter structures (?id=... or &id=...)
-  const match = url.match(/[?&]id=([^&]+)/);
-  if (match && match[1]) {
-    return match[1];
-  }
-
-  return null;
-}
-
-
-/**
- * Server-Side Proxy: Fetches a Google Drive asset internally and converts it to a safe inline Base64 stream
- */
-function getDriveImageAsBase64(rawUrl) {
+function getFirebaseStorageImage(rawUrl) {
   try {
-    if (!rawUrl || rawUrl.trim() === "" || rawUrl.indexOf("-") === 0) return "";
-
-    let fileId = "";
-
-    // Extract the raw file ID out of whatever format is stored in the sheet
-    if (rawUrl.indexOf("id=") !== -1) {
-      fileId = rawUrl.split("id=")[1].split("&")[0];
-    } else {
-      const matches = rawUrl.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
-      fileId = (matches && matches[1]) ? matches[1] : "";
-    }
-
-    if (!fileId) throw new Error("Could not parse file identifier.");
-
-    // Fetch the file bytes directly inside Google's cloud boundaries
-    const file = DriveApp.getFileById(fileId);
-    const blob = file.getBlob();
-    const bytes = blob.getBytes();
+    if (!rawUrl) return "";
+    const response = UrlFetchApp.fetch(rawUrl);
+    const blob = response.getBlob();
     const contentType = blob.getContentType();
-
-    // Encode to a clean inline web asset string
-    const base64String = Utilities.base64Encode(bytes);
-    return `data:${contentType};base64,${base64String}`;
-
+    const base64 = Utilities.base64Encode(blob.getBytes());
+    return `data:${contentType};base64,${base64}`;
   } catch (err) {
-    console.error(">>> [PROXY ERROR] Failed to stream image file bytes: ", err);
+    console.error("Firebase Storage Proxy Error: ", err);
     return "ERROR";
   }
 }
 
 /**
- * Perform secure inline data mapping modifications for verified guest registry records
+ * Update Firestore guest record
  */
-function modifyQidRowBackend(slNo, updates) {
+function updateFirestoreGuestRecord(docId, updates) {
   try {
-    const ss = SpreadsheetApp.openById(ID_QID_VERIFIED_LIST);
-    const sheet = ss.getSheetByName(SHEET_NAME_QID);
-
-    if (!sheet) {
-      throw new Error("Target registration spreadsheet tab configuration could not be opened.");
-    }
-
-    const values = sheet.getDataRange().getValues();
-
-    for (let i = 1; i < values.length; i++) {
-      if (parseInt(values[i][0]) === parseInt(slNo)) {
-        const actualRowInSheet = i + 1;
-
-        // --- SECURE COLUMN ORIENTATION RE-MAPPING ---
-        // Col 4 (Index 3) -> ID Document Number
-        // Col 5 (Index 4) -> Guest Full Name
-        // Col 6 (Index 5) -> Phone/WhatsApp Mobile Identity
-        sheet.getRange(actualRowInSheet, 4).setValue(updates.idNo);
-        sheet.getRange(actualRowInSheet, 5).setValue(updates.name);
-        sheet.getRange(actualRowInSheet, 6).setValue(updates.phone);
-
-        SpreadsheetApp.flush(); // Flush updates out of internal caches straight into the file cell blocks
-        console.log(">>> [BACKEND LEDGER SAVE COMPLETED] Modified SlNo [" + slNo + "] inside Row Matrix [" + actualRowInSheet + "]");
-        return "SUCCESS";
+    // Correcting updateMask to target nested fields: guestDetails.name, guestDetails.phone, verification.idNo
+    const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/guests/${docId}?updateMask.fieldPaths=guestDetails.name&updateMask.fieldPaths=guestDetails.phone&updateMask.fieldPaths=verification.idNo`;
+    const payload = {
+      fields: {
+        guestDetails: {
+          mapValue: {
+            fields: {
+              name: { stringValue: updates.name },
+              phone: { stringValue: updates.phone }
+            }
+          }
+        },
+        verification: {
+          mapValue: { fields: { idNo: { stringValue: updates.idNo } } }
+        }
       }
-    }
-    throw new Error("Record referencing identification sequence index " + slNo + " vanished unexpectedly.");
+    };
+    UrlFetchApp.fetch(url, {
+      method: "patch",
+      contentType: "application/json",
+      headers: { "Authorization": "Bearer " + ScriptApp.getOAuthToken() },
+      payload: JSON.stringify(payload)
+    });
+    return "SUCCESS";
   } catch (err) {
-    console.error(">>> [MODIFY QID BACKEND EXCEPTION]", err);
+    console.error("Firestore update error: ", err);
     throw new Error(err.message);
   }
 }
 
+/**
+ * Batch delete Firestore documents
+ */
+function deleteFirestoreGuestsBatch(ids) {
+  ids.forEach(id => deleteFirestoreGuestRecord(id));
+  return "SUCCESS";
+}
+
+/**
+ * Inventory available years from Firestore timestamps
+ */
+function getFirestoreRegistryConfig() {
+  const currentYear = new Date().getFullYear().toString();
+  try {
+    const records = fetchFirestoreGuestsRegistry();
+    const years = [...new Set(records.map(r => {
+      if (!r.timestamp) return currentYear;
+      const d = new Date(r.timestamp);
+      return isNaN(d.getTime()) ? currentYear : d.getFullYear().toString();
+    }))];
+    years.sort((a,b) => b - a);
+    return {
+      years: years.length ? years : [currentYear],
+      activeYear: currentYear
+    };
+  } catch (e) {
+    return { years: [currentYear], activeYear: currentYear };
+  }
+}
 
 /*** Google calender sync */
 /**
@@ -1790,6 +1697,27 @@ function getDynamicQidYearsConfig() {
       activeYear: currentCalendarYear
     };
   }
+}
+
+/**
+ * Helper to delete a file from Firebase Storage using its Download URL via REST API
+ */
+function deleteFileFromFirebaseStorage(downloadUrl) {
+  // Extract bucket and encoded path from the URL
+  // Format: https://firebasestorage.googleapis.com/v0/b/[bucket]/o/[path]?alt=media
+  const parts = downloadUrl.split('/o/');
+  if (parts.length < 2) return;
+  
+  const bucket = parts[0].split('/b/')[1];
+  const encodedPath = parts[1].split('?')[0];
+  
+  const deleteUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket}/o/${encodedPath}`;
+  
+  return UrlFetchApp.fetch(deleteUrl, {
+    method: "delete",
+    headers: { "Authorization": "Bearer " + ScriptApp.getOAuthToken() },
+    muteHttpExceptions: true // Prevents whole batch from failing if one image is already gone
+  });
 }
 
 /**
