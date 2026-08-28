@@ -445,6 +445,26 @@
 
         <div class="modal-body p-3 p-md-4">
 
+          <!-- STORAGE CONSUMPTION MONITOR -->
+          <div class="storage-progress-container mb-4 shadow-sm">
+            <div class="d-flex justify-content-between align-items-center mb-1">
+              <div class="d-flex align-items-center">
+                <i class="bi bi-cloud-check text-primary me-2"></i>
+                <span class="fw-bold text-dark" style="font-size: 11px; letter-spacing: 0.3px;">FIRESTORE & MEDIA STORAGE</span>
+              </div>
+              <span id="storage-usage-text" class="badge bg-light text-muted border" style="font-size: 10px;">Calculating...</span>
+            </div>
+            <div class="progress storage-bar-tiny mb-2">
+              <div id="storage-progress-bar" class="progress-bar progress-bar-striped progress-bar-animated bg-success" role="progressbar" style="width: 0%"></div>
+            </div>
+            <div class="d-flex justify-content-between align-items-center">
+              <small class="text-muted" style="font-size: 9px;">*Free tier limit: 5.0 GB</small>
+              <button type="button" class="btn btn-link p-0 text-decoration-none text-primary fw-bold" style="font-size: 10px;" onclick="triggerStorageCleanupLogic()">
+                <i class="bi bi-gear-wide-connected me-1"></i> OPTIMIZE STORAGE
+              </button>
+            </div>
+          </div>
+
           <div class="input-group mb-3 shadow-sm rounded-pill bg-white overflow-hidden border">
             <span class="input-group-text bg-white border-0 ps-3"><i class="bi bi-search text-muted"></i></span>
             <input type="text" id="qidSearchInput" class="form-control border-0 form-control-sm py-2 shadow-none" placeholder="Search by name, phone, or arriving city..." oninput="filterQidRecords()">
@@ -454,7 +474,7 @@
             <div class="col-12 px-2">
               <div class="single-line-filter-container">
 
-                <div class="compact-checkbox-wrapper me-1">
+                <div class="compact-checkbox-wrapper me-1 qid-selection-element" id="qidMasterCheckboxContainer">
                   <div class="form-check d-flex align-items-center m-0" style="min-height: 34px;">
                     <input type="checkbox" id="qidMasterCheckbox" class="form-check-input shadow-none cursor-pointer border-secondary-subtle m-0" style="width: 16px; height: 16px;" onchange="toggleAllQidCheckboxes(this)">
                     <label class="form-check-label text-muted small fw-medium ms-1 cursor-pointer unselectable" for="qidMasterCheckbox" style="font-size: 12px; white-space: nowrap;">Select All</label>
@@ -565,7 +585,7 @@
         </div>
         <div class="modal-body px-4 pb-4 pt-2">
           <form id="formQidEditUser" onsubmit="event.preventDefault(); submitQidProfileEdits();">
-            <input type="hidden" id="editQidSlNo" value="">
+            <input type="hidden" id="editQidId" value="">
             <div class="mb-3">
               <label for="editQidName" class="form-label text-muted small fw-medium mb-1">Verified Full Name</label>
               <input type="text" class="form-control form-control-sm border shadow-none" id="editQidName" required style="border-radius: 8px; height: 38px;">
@@ -582,6 +602,20 @@
             <div class="mb-4">
               <label for="editQidDocNo" class="form-label text-muted small fw-medium mb-1">Government ID Identifier</label>
               <input type="text" class="form-control form-control-sm border shadow-none" id="editQidDocNo" required style="border-radius: 8px; height: 38px; font-weight: 500;">
+            </div>
+            <div class="mb-3">
+              <label for="editQidAddress" class="form-label text-muted small fw-medium mb-1">Residential Address</label>
+              <textarea class="form-control form-control-sm border shadow-none" id="editQidAddress" rows="2" style="border-radius: 8px; font-size: 13px;"></textarea>
+            </div>
+            <div class="row g-2 mb-4">
+              <div class="col-6">
+                <label for="editQidEmergencyName" class="form-label text-muted small fw-medium mb-1">Emergency Name</label>
+                <input type="text" class="form-control form-control-sm border shadow-none" id="editQidEmergencyName" style="border-radius: 8px; height: 38px; font-size: 13px;">
+              </div>
+              <div class="col-6">
+                <label for="editQidEmergencyPhone" class="form-label text-muted small fw-medium mb-1">Emergency Phone</label>
+                <input type="text" class="form-control form-control-sm border shadow-none" id="editQidEmergencyPhone" style="border-radius: 8px; height: 38px; font-size: 13px;">
+              </div>
             </div>
             <div class="d-flex gap-2 pt-2">
               <button type="button" class="btn btn-light btn-sm border px-3 w-50" data-bs-dismiss="modal" style="border-radius: 8px; font-weight: 500; height: 38px;">Cancel</button>

@@ -1539,7 +1539,7 @@ function checkDateAvailability() {
 // QID DATASTORE & CORE CONTROLLER LOGIC
 // =========================================================================
 let globalQidDataStore = [];      
-let activeSelectedSlNos = [];     
+let activeSelectedIds = [];     
 
 function getQidModalInstance() {
     return bootstrap.Modal.getOrCreateInstance(document.getElementById('qidHubModal'));
@@ -1568,11 +1568,11 @@ function openQidHubModal() {
     document.getElementById('qidUserFeed').innerHTML = 
         '<div class="col-12 text-center py-5">' +
             '<div class="spinner-border text-success spinner-border-sm me-2" role="status"></div>' +
-            '<span class="text-muted small">Accessing Secure ID Vault...</span>' +
+            '<span class="text-muted small">Accessing Firestore ID Vault...</span>' +
         '</div>';
         
-    // 3. DYNAMIC LIFECYCLE FORK: Query dynamic year folders from Google Drive
-    console.log(">>> [UI LIFE] Querying Drive storage mapping allocations for dynamic years...");
+    // 3. DYNAMIC LIFECYCLE FORK: Query dynamic year groupings from Firestore
+    console.log(">>> [UI LIFE] Querying Firestore storage mapping allocations for dynamic years...");
     google.script.run
         .withSuccessHandler(function(config) {
             const yearDropdown = document.getElementById('qidFilterYear');
@@ -1580,7 +1580,7 @@ function openQidHubModal() {
                 // Clear existing dynamic elements but leave "All Years" intact
                 yearDropdown.innerHTML = '<option value="">All Years</option>';
                 
-                // Inject option definitions dynamically from real Drive folder profiles
+                // Inject option definitions dynamically from Firestore collection groupings
                 config.years.forEach(year => {
                     const option = document.createElement('option');
                     option.value = year;
@@ -1592,15 +1592,16 @@ function openQidHubModal() {
                     }
                     yearDropdown.appendChild(option);
                 });
-                console.log(`>>> [UI COMPLETE] Dynamic Year Combobox populated with: [${config.years.join(', ')}].`);
+                console.log(`>>> [UI COMPLETE] Dynamic Year Combobox populated from Firestore: [${config.years.join(', ')}].`);
             }
             
-            // 4. Proceed to fetch main user list rows once years are ready
+            // 4. Proceed to fetch main guest list records once years are ready
             fetchMasterQidDataMatrix();
+            updateStorageMetricsUI();
         })
         .withFailureHandler(function(err) {
-            console.error(">>> [UI LIFECYCLE FAULT] Years inventory step bypassed due to error: ", err.message);
-            // Fallback strategy: Populate current calendar year as safety baseline and pass context
+            console.error(">>> [UI LIFECYCLE FAULT] Firestore years inventory failed: ", err.message);
+            // Fallback strategy: Populate current calendar year as safety baseline
             const yearDropdown = document.getElementById('qidFilterYear');
             if (yearDropdown && yearDropdown.options.length <= 1) {
                 const fallbackYear = new Date().getFullYear().toString();
@@ -1612,24 +1613,101 @@ function openQidHubModal() {
             }
             fetchMasterQidDataMatrix();
         })
-        .getDynamicQidYearsConfig(); // Runs Drive App lookup execution thread upstream
+        .getFirestoreRegistryConfig(); // Renamed to reflect Firestore migration
 }
 
 /**
- * Isolated method handler to fetch raw QID record feeds from spreadsheet database
+ * Calculates and updates the Storage Bar UI
+ */
+function updateStorageMetricsUI() {
+    const totalLimitGB = 5.0; 
+    
+    // This would ideally be a google.script.run call to get actual bytes
+    // For now, we estimate based on number of records (e.g., each record with 3 images is ~2MB)
+    const recordCount = globalQidDataStore.length;
+    const estimatedUsageMB = (recordCount * 1.8); // 1.8MB per profile average
+    const usageGB = (estimatedUsageMB / 1024).toFixed(2);
+    const percent = Math.min(((usageGB / totalLimitGB) * 100), 100);
+
+    const bar = document.getElementById('storage-progress-bar');
+    const label = document.getElementById('storage-usage-text');
+
+    if (bar && label) {
+        bar.style.width = percent + '%';
+        label.innerText = `${usageGB} GB / ${totalLimitGB} GB`;
+
+        // Dynamic color shifting
+        bar.className = 'progress-bar progress-bar-striped progress-bar-animated ';
+        if (percent > 85) {
+            bar.classList.add('bg-danger');
+        } else if (percent > 60) {
+            bar.classList.add('bg-warning');
+        } else {
+            bar.classList.add('bg-success');
+        }
+    }
+}
+
+/**
+ * Logic to handle "Optimize Storage" - filtering for old years
+ */
+function triggerStorageCleanupLogic() {
+   // Enter Selection Mode
+    isQidSelectionMode = true;
+    
+    // Show the "Select All" header
+    const masterCheck = document.getElementById('qidMasterCheckboxContainer');
+    if (masterCheck) masterCheck.classList.remove('qid-selection-element');
+
+    // Auto-apply Year Filter (Last Year)
+    const currentYear = new Date().getFullYear();
+    const legacyYear = (currentYear - 1).toString();
+    const yearFilter = document.getElementById('qidFilterYear');
+    if (yearFilter) {
+        yearFilter.value = legacyYear;
+    }
+
+    // Refresh Feed to show checkboxes and filtered data
+    filterQidRecords();
+
+    // Show the bottom action panel with an instruction
+    const panel = document.getElementById('qidBatchActionPanel');
+    if (panel) {
+        panel.classList.remove('d-none');
+        document.getElementById('qidSelectedCountText').innerText = "Select records to delete...";
+    }
+}
+
+/**
+ * Exits the Optimization/Selection mode and restores clean UI
+ */
+function exitQidSelectionMode() {
+    isQidSelectionMode = false;
+    activeSelectedIds = [];
+    
+    const masterCheck = document.getElementById('qidMasterCheckboxContainer');
+    if (masterCheck) masterCheck.classList.add('qid-selection-element');
+    
+    filterQidRecords(); // Rerender to hide checkboxes
+    evaluateQidSelectionState(); // Hide bottom panel
+}
+
+
+/**
+ * Isolated method handler to fetch raw Firestore guest records
  */
 function fetchMasterQidDataMatrix() {
     google.script.run
         .withSuccessHandler(function(records) {
             globalQidDataStore = records || [];
-            activeSelectedSlNos = []; // Soft clear previous session selection vectors
+            activeSelectedIds = []; // Soft clear previous session selection vectors
             filterQidRecords(); // Renders grid cards with local persistent filters applied
         })
         .withFailureHandler(function(err) {
             document.getElementById('qidUserFeed').innerHTML = 
-                '<div class="col-12 alert alert-danger border-0 shadow-sm mx-2">Failed to load ID Records: ' + err.message + '</div>';
+                '<div class="col-12 alert alert-danger border-0 shadow-sm mx-2">Failed to load Firestore Records: ' + err.message + '</div>';
         })
-        .fetchQidVerifiedRegistry();
+        .fetchFirestoreGuestsRegistry(); // Renamed to point to guests collection
 }
 
 
@@ -1708,7 +1786,7 @@ function renderQidFeed(records) {
         const safeNameEscaped = (user.name || '').replace(/'/g, "\\'");
 
         // Rebind checked states matching the active selected cache
-        const isChecked = activeSelectedSlNos.includes(String(user.slNo)) ? 'checked' : '';
+        const isChecked = activeSelectedIds.includes(String(user.id)) ? 'checked' : '';
 
         html += `
         <div class="col-12 col-md-6 qid-user-card" data-search="${searchText}">
@@ -1716,14 +1794,14 @@ function renderQidFeed(records) {
                 
                 <div class="position-absolute" style="top: 15px; left: 14px; z-index: 10;">
                     <input type="checkbox" class="form-check-input qid-row-checkbox shadow-none cursor-pointer border-secondary-subtle" 
-                           data-slno="${user.slNo}" ${isChecked} style="width: 17px; height: 17px;" onchange="handleSingleCheckboxChange(this)">
+                           data-id="${user.id}" ${isChecked} style="width: 17px; height: 17px;" onchange="handleSingleCheckboxChange(this)">
                 </div>
 
                 <div class="position-absolute top-0 end-0 mt-2 me-2" style="z-index: 10;">
-                    <button type="button" class="btn btn-link btn-sm p-1 text-muted me-1" onclick="actionModifyQidUser(${user.slNo})" title="Modify Record">
+                    <button type="button" class="btn btn-link btn-sm p-1 text-muted me-1" onclick="actionModifyQidUser('${user.id}')" title="Modify Record">
                         <i class="bi bi-pencil fs-6 text-secondary"></i>
                     </button>
-                    <button type="button" class="btn btn-link btn-sm p-1 text-muted" onclick="actionRemoveQidUser(${user.slNo}, '${safeNameEscaped}')" title="Delete Profile">
+                    <button type="button" class="btn btn-link btn-sm p-1 text-muted" onclick="actionRemoveQidUser('${user.id}', '${safeNameEscaped}')" title="Delete Profile">
                         <i class="bi bi-trash fs-6 text-danger"></i>
                     </button>
                 </div>
@@ -1738,7 +1816,7 @@ function renderQidFeed(records) {
                     </div>
                 </div>
 
-                <div id="qidDetails_${user.slNo}" class="ps-4">
+                <div id="qidDetails_${user.id}" class="ps-4">
                     <div class="row g-2 pt-2 border-top my-1 text-muted" style="font-size: 11.5px;">
                         <div class="col-6"><strong>ID Details:</strong> <span class="text-dark">${user.idType || 'Govt'} (${user.idNo || '-'})</span></div>
                         <div class="col-6"><strong>Origin City:</strong> <span class="text-dark">${user.arrivingCity || '-'}</span></div>
@@ -1770,13 +1848,13 @@ function renderQidFeed(records) {
  * Handle state data alterations for single card checkbox interaction elements
  */
 function handleSingleCheckboxChange(node) {
-    const targetSlNo = String(node.getAttribute('data-slno'));
+    const targetId = String(node.getAttribute('data-id'));
     if (node.checked) {
-        if (!activeSelectedSlNos.includes(targetSlNo)) {
-            activeSelectedSlNos.push(targetSlNo);
+        if (!activeSelectedIds.includes(targetId)) {
+            activeSelectedIds.push(targetId);
         }
     } else {
-        activeSelectedSlNos = activeSelectedSlNos.filter(id => id !== targetSlNo);
+        activeSelectedIds = activeSelectedIds.filter(id => id !== targetId);
     }
     evaluateQidSelectionState();
     syncMasterCheckboxState();
@@ -1794,12 +1872,12 @@ function toggleAllQidCheckboxes(masterNode) {
     
     visibleCheckboxes.forEach(cb => {
         cb.checked = isChecked;
-        const targetSlNo = String(cb.getAttribute('data-slno'));
+        const targetId = String(cb.getAttribute('data-id'));
         
         if (isChecked) {
-            if (!activeSelectedSlNos.includes(targetSlNo)) activeSelectedSlNos.push(targetSlNo);
+            if (!activeSelectedIds.includes(targetId)) activeSelectedIds.push(targetId);
         } else {
-            activeSelectedSlNos = activeSelectedSlNos.filter(id => id !== targetSlNo);
+            activeSelectedIds = activeSelectedIds.filter(id => id !== targetId);
         }
     });
     
@@ -1812,11 +1890,11 @@ function toggleAllQidCheckboxes(masterNode) {
 function evaluateQidSelectionState() {
     const panel = document.getElementById('qidBatchActionPanel');
     const countText = document.getElementById('qidSelectedCountText');
-    const totalCount = activeSelectedSlNos.length;
+    const totalCount = activeSelectedIds.length;
     
     if (totalCount > 0) {
         if (countText) {
-            countText.innerText = `${totalCount} item${totalCount > 1 ? 's' : ''} selected for deletion`;
+            countText.innerText = `${totalCount} profile${totalCount > 1 ? 's' : ''} selected for deletion`;
         }
         if (panel && panel.classList.contains('d-none')) {
             panel.classList.remove('d-none');
@@ -1854,13 +1932,8 @@ function syncMasterCheckboxState() {
  * FEATURE 2 ENGINE: Resets all checkboxes and safely retracts structural overlays
  */
 function clearQidSelections() {
-    activeSelectedSlNos = [];
-    const checkboxes = document.querySelectorAll('.qid-row-checkbox');
-    checkboxes.forEach(cb => cb.checked = false);
-    
-    const master = document.getElementById('qidMasterCheckbox');
-    if (master) master.checked = false;
-    
+    // Instead of just clearing IDs, we exit the special mode entirely
+    exitQidSelectionMode();
     evaluateQidSelectionState();
 }
 
@@ -1913,18 +1986,18 @@ function showQidActionPrompt(options) {
 /**
  * Modernized Delete Record Execution utilizing professional Bootstrap layouts
  */
-function actionRemoveQidUser(slNo, name) {
+function actionRemoveQidUser(id, name) {
     showQidActionPrompt({
         type: "danger",
         title: "Delete Verified Profile?",
-        message: "Are you certain you want to permanently delete " + name + "'s verification history? This will purge their record inside your spreadsheet ledger maps instantly.",
+        message: "Are you certain you want to permanently delete " + name + "'s verification history? This will purge their record from Firestore and all associated images from Storage instantly.",
         confirmText: "Delete Record",
         onConfirm: function() {
             // Keep user context responsive by updating background container elements
             document.getElementById('qidUserFeed').innerHTML = `
                 <div class="col-12 text-center py-5">
                     <div class="spinner-border text-danger spinner-border-sm me-2" role="status"></div>
-                    <span class="text-danger small fw-medium">Purging profile from registry ledger...</span>
+                    <span class="text-danger small fw-medium">Purging profile from Firestore registry...</span>
                 </div>`;
                 
             google.script.run
@@ -1940,7 +2013,7 @@ function actionRemoveQidUser(slNo, name) {
                         confirmText: "Close"
                     });
                 })
-                .deleteQidRowBackend(slNo);
+                .deleteFirestoreGuestRecord(id);
         }
     });
 }
@@ -1948,22 +2021,27 @@ function actionRemoveQidUser(slNo, name) {
 /**
  * Modernized Modifier Module: Opens the editing modal and auto-populates old data values
  */
-function actionModifyQidUser(slNo) {
-    // Locate target profile within your local globally stored array matrix cache
-    const targetRecord = globalQidDataStore.find(function(u) { return parseInt(u.slNo) === parseInt(slNo); });
+function actionModifyQidUser(id) {
+    // Locate target profile within the local Firestore-backed cache
+    const targetRecord = globalQidDataStore.find(function(u) { return String(u.id) === String(id); });
     if (!targetRecord) {
         alert("Unable to cross-reference file verification data.");
         return;
     }
     
     // Inject values securely into form elements
-    document.getElementById('editQidSlNo').value = targetRecord.slNo;
+    document.getElementById('editQidId').value = targetRecord.id;
     document.getElementById('editQidName').value = targetRecord.name || "";
     document.getElementById('editQidDocNo').value = targetRecord.idNo || "";
+    document.getElementById('editQidAddress').value = targetRecord.address || "";
+    document.getElementById('editQidEmergencyName').value = targetRecord.emergencyName || "";
     
     // Sanitize phone input formats automatically to match strict data protocols (+91 prefix removal)
     let cleanPhoneDisplay = (targetRecord.phone || "").toString().replace(/^\+91/, "").replace(/\s+/g, "");
     document.getElementById('editQidPhone').value = cleanPhoneDisplay;
+
+    let cleanEmergPhoneDisplay = (targetRecord.emergencyPhone || "").toString().replace(/^\+91/, "").replace(/\s+/g, "");
+    document.getElementById('editQidEmergencyPhone').value = cleanEmergPhoneDisplay;
     
     // Fire up the modal overlay element frame cleanly
     const editModalEl = document.getElementById('qidEditUserModal');
@@ -1974,22 +2052,28 @@ function actionModifyQidUser(slNo) {
  * Serializes, sanitizes, and sends profile updates to the spreadsheet ledger
  */
 function submitQidProfileEdits() {
-    const slNo = document.getElementById('editQidSlNo').value;
+    const docId = document.getElementById('editQidId').value;
     const rawName = document.getElementById('editQidName').value;
     const rawPhone = document.getElementById('editQidPhone').value;
     const rawDocNo = document.getElementById('editQidDocNo').value;
+    const rawAddress = document.getElementById('editQidAddress').value;
+    const rawEmergName = document.getElementById('editQidEmergencyName').value;
+    const rawEmergPhone = document.getElementById('editQidEmergencyPhone').value;
     
     // --- SYSTEM CORRECTION PRESETS: Strict normalization enforcement ---
     // Instantly strip trailing spaces, +91 prefixes, and inner dashes
     const sanitizedName = rawName.trim();
     const sanitizedDocNo = rawDocNo.trim();
+    const sanitizedAddress = rawAddress.trim();
+    const sanitizedEmergName = rawEmergName.trim();
     const sanitizedPhone = rawPhone.toString().replace(/^\+91/, "").replace(/[-\s()]+/g, "").trim();
+    const sanitizedEmergPhone = rawEmergPhone.toString().replace(/^\+91/, "").replace(/[-\s()]+/g, "").trim();
     
     const saveButton = document.getElementById('btnQidEditSave');
     saveButton.disabled = true;
     saveButton.innerHTML = `<span class="spinner-border spinner-border-sm me-1" role="status"></span> Saving...`;
     
-    // Fire network call upstream to modify backend data indexes
+    // Fire network call upstream to modify Firestore document
     google.script.run
         .withSuccessHandler(function(response) {
             saveButton.disabled = false;
@@ -1998,7 +2082,7 @@ function submitQidProfileEdits() {
             const editModalEl = document.getElementById('qidEditUserModal');
             bootstrap.Modal.getOrCreateInstance(editModalEl).hide();
             
-            console.log(">>> [UPDATE QID PROFILES COMPLETED]", response);
+            console.log(">>> [UPDATE FIRESTORE PROFILE COMPLETED]", response);
             openQidHubModal(); 
         })
         .withFailureHandler(function(err) {
@@ -2008,19 +2092,22 @@ function submitQidProfileEdits() {
             showQidActionPrompt({
                 type: "danger",
                 title: "Modification Aborted",
-                message: "Internal ledger synchronization failed: " + err.message,
+                message: "Firestore synchronization failed: " + err.message,
                 confirmText: "Close"
             });
         })
-        .modifyQidRowBackend(slNo, { 
+        .updateFirestoreGuestRecord(docId, { 
             name: sanitizedName, 
             phone: sanitizedPhone,
-            idNo: sanitizedDocNo
+            idNo: sanitizedDocNo,
+            address: sanitizedAddress,
+            emergencyName: sanitizedEmergName,
+            emergencyPhone: sanitizedEmergPhone
         });
 }
 
 /**
- * Intercept Google Drive URLs and pipe them directly into an in-app lightbox frame
+ * Intercept Firebase Storage URLs and pipe them directly into an in-app lightbox frame
  */
 function launchSecureQidPreview(rawUrl) {
     if (!rawUrl || rawUrl.trim() === "" || rawUrl.indexOf("-") === 0) {
@@ -2042,7 +2129,7 @@ function launchSecureQidPreview(rawUrl) {
             spinner.classList.add('d-none');
             
             if (!base64DataStream || base64DataStream === "ERROR") {
-                alert("Google Drive security layer blocked raw URL streaming. Please verify spreadsheet permissions.");
+                alert("Firebase Storage access blocked. Please verify security rules.");
                 return;
             }
             
@@ -2054,7 +2141,7 @@ function launchSecureQidPreview(rawUrl) {
             imageFrame.style.opacity = "1";
             alert("System Transmission Failure: " + err.message);
         })
-        .getDriveImageAsBase64(rawUrl);
+        .getFirebaseStorageImage(rawUrl);
 }
 
 function actionPurgeGuestRecord(reservationId, name, checkInDate) {
@@ -2091,9 +2178,9 @@ function actionPurgeGuestRecord(reservationId, name, checkInDate) {
  * EXECUTION ENGINE: Upgraded to prevent animation/backdrop race conditions and handle multi-selections smoothly
  */
 function triggerBatchDeleteQid() {
-    if (activeSelectedSlNos.length === 0) return;
+    if (activeSelectedIds.length === 0) return;
     
-    console.log(`>>> [DELETION PIPELINE] Initialized batch processing loop arrays for:`, activeSelectedSlNos);
+    console.log(`>>> [DELETION PIPELINE] Initialized Firestore batch delete for:`, activeSelectedIds);
     
     const hubModalEl = document.getElementById('qidHubModal');
     const actionModalEl = document.getElementById('qidActionModal');
@@ -2110,8 +2197,8 @@ function triggerBatchDeleteQid() {
     
     // --- SETUP CONFIRMATION MODAL CONTENT DIRECTLY ---
     title.innerText = "Confirm Batch Deletion";
-    message.innerHTML = `Are you sure you want to permanently delete all <strong>${activeSelectedSlNos.length} selected profiles</strong>?<br><span class="text-danger fw-medium">This will remove their data from the ledger and purge all associated images from Google Drive.</span>`;
-    
+    message.innerHTML = `Are you sure you want to permanently delete all <strong>${activeSelectedIds.length} selected profiles</strong>?<br><span class="text-danger fw-medium">This will remove their data from Firestore and purge all associated images from Firebase Storage.</span>`;
+
     if (iconContainer) iconContainer.className = "mb-3 d-flex align-items-center justify-content-center mx-auto rounded-circle bg-danger-subtle text-danger";
     if (icon) icon.className = "bi bi-exclamation-triangle-fill fs-3";
     
@@ -2120,7 +2207,7 @@ function triggerBatchDeleteQid() {
     
     // Handle the deletion processing loop
     freshConfirmBtn.addEventListener('click', function() {
-        const totalItems = activeSelectedSlNos.length;
+        const totalItems = activeSelectedIds.length;
         console.log(`>>> [DELETION PIPELINE] Batch execution confirmed for ${totalItems} items.`);
         
         // 1. Hide confirmation wrapper pop-up modal
@@ -2134,10 +2221,10 @@ function triggerBatchDeleteQid() {
                 <div class="col-12 text-center py-5 animate__animated animate__fadeIn">
                     <div class="spinner-border text-danger" role="status" style="width: 2.5rem; height: 2.5rem;"></div>
                     <div class="mt-3 text-secondary fw-medium small">
-                        Permanently purging ${totalItems} secure registry profile(s)...
+                        Permanently purging ${totalItems} guest profile(s) from Firestore...
                     </div>
                     <div class="text-muted mt-1" style="font-size: 11px;">
-                        Updating cloud storage ledgers, please do not close this window.
+                        Updating cloud collections, please do not close this window.
                     </div>
                 </div>
             `;
@@ -2153,8 +2240,8 @@ function triggerBatchDeleteQid() {
              console.log(">>> [SERVER API SUCCESS] Batch delete sweep finalized.");
              
              // Reset selections
-             if (typeof clearQidSelections === "function") clearQidSelections();
-             activeSelectedSlNos = [];
+             clearQidSelections();
+             activeSelectedIds = [];
              
              const masterCheckbox = document.getElementById('qidMasterCheckbox');
              if (masterCheckbox) masterCheckbox.checked = false;
@@ -2169,17 +2256,18 @@ function triggerBatchDeleteQid() {
              }
           })
           .withFailureHandler(function(err) {
-             console.error(">>> [SERVER API FAILURE] Transaction aborted:", err);
+             console.error(">>> [SERVER API FAILURE] Batch delete sweep failed:", err);
              if (userFeedContainer) {
                  userFeedContainer.innerHTML = `
-                     <div class="col-12 alert alert-danger border-0 shadow-sm mx-2">
+                     <div class="col-12 alert alert-danger border-0 shadow-sm mx-2 mt-3">
                          <i class="bi bi-exclamation-triangle-fill me-2"></i>
-                         <strong>Batch Deletion Failed:</strong> ${err.message}
+                         <strong>Deletion Error:</strong> The system failed to purge some assets. 
+                         <div class="small mt-1 text-dark">${err.message}</div>
                      </div>
                  `;
              }
            })
-          .deleteQidRowsBatchBackend(activeSelectedSlNos);
+          .deleteFirestoreGuestsBatch(activeSelectedIds);
     });
 
     // --- EXECUTION STEP ---
