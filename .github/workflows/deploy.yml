@@ -4,8 +4,7 @@ on:
   push:
     branches:
       - main
-      - featuresBugFixes
-
+      
 jobs:
   test-stage:
     runs-on: ubuntu-latest
