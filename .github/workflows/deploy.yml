@@ -125,9 +125,6 @@ jobs:
           EOF
           chmod 600 "$HOME/.clasprc.json"
 
-      - name: Push Code to Script
-        run: clasp push --force
-
       - name: Create Project Settings
         env:
           SCRIPT_ID: ${{ secrets.SCRIPT_ID }}
@@ -141,6 +138,9 @@ jobs:
             fs.writeFileSync('.clasp.json', JSON.stringify(config));
           "
 
+      - name: Push Code to Script
+        run: clasp push --force
+
       - name: Deploy New Version to Production
         env:
           DEPLOYMENT_ID: ${{ vars.DEPLOYMENT_ID }}
@@ -151,6 +151,26 @@ jobs:
           fi
           # Updates existing production deployment ID with a newly created version snapshot
           clasp deploy -i "$DEPLOYMENT_ID" --description "Production Release: ${{ github.sha }}"
+
+      - name: Update Short.io Vanity URL
+        env:
+          SHORT_IO_API_KEY: ${{ secrets.SHORT_IO_API_KEY }}
+          DEPLOYMENT_ID: ${{ vars.DEPLOYMENT_ID }}
+        run: |
+          if [ -z "$SHORT_IO_API_KEY" ]; then
+            echo "⚠️ Warning: SHORT_IO_API_KEY is missing. Skipping URL alignment."
+            exit 0
+          fi
+          PROD_URL="https://script.google.com/macros/s/$DEPLOYMENT_ID/exec"
+          echo "Fetching Link ID for vinyasanilaya.s.gy/VinyasaDashboard..."
+          LINK_ID=$(curl -s -X GET "https://api.short.io/links/expand?domain=vinyasanilaya.s.gy&path=VinyasaDashboard" -H "Authorization: $SHORT_IO_API_KEY" | node -e "const data = JSON.parse(require('fs').readFileSync(0)); console.log(data.idString || '');")
+          if [ -z "$LINK_ID" ] || [ "$LINK_ID" == "undefined" ]; then
+            echo "❌ Error: Could not find link ID on Short.io."
+            exit 1
+          fi
+          curl -s -X POST "https://api.short.io/links/$LINK_ID" -H "Authorization: $SHORT_IO_API_KEY" -H "Content-Type: application/json" -d "{\"originalURL\": \"$PROD_URL\"}"
+          echo "### Short.io URL Aligned 🔗" >> $GITHUB_STEP_SUMMARY
+          echo "Vanity URL: [https://vinyasanilaya.s.gy/VinyasaDashboard](https://vinyasanilaya.s.gy/VinyasaDashboard)" >> $GITHUB_STEP_SUMMARY
 
       - name: Final Success Notification
         env:

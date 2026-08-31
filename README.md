@@ -25,7 +25,7 @@ A professional property management and guest relations dashboard built on **Goog
 
 ### ⚙️ Automation & Synchronization
 *   **Airbnb Sync**: One-click sync to update the dashboard with the latest Airbnb email confirmations and bookings.
-*   **CI/CD Pipeline**: Fully automated deployment via GitHub Actions using `@google/clasp`.
+*   **CI/CD Pipeline**: Fully automated deployment via GitHub Actions with integrated **Short.io** URL alignment.
 
 ## 🛠️ Tech Stack
 *   **Frontend**: HTML5, CSS3, Bootstrap 5.3, Bootstrap Icons.
@@ -38,7 +38,6 @@ The project uses a two-stage deployment pipeline:
 2.  **Production Deploy**: Triggered after the test stage, it updates the live production deployment ID with a new version snapshot and provides a summarized deployment report.
 
 ## 🛤️ Pending Features & Roadmap
-*   **[High Priority]** **Workflow URL Optimization**: Implement automated logic within the GitHub Action workflow to update a TinyURL/Short-URL link immediately following a successful production deployment.
 *   **Data Visualization**: Integrated charts to visualize monthly revenue growth and occupancy trends.
 *   **Automated Emailers**: Triggering automated confirmation emails to guests upon registration.
 
@@ -52,6 +51,7 @@ The project uses a two-stage deployment pipeline:
 To enable the automated deployment, ensure the following are set in your repository secrets:
 *   `CLASPRC_JSON`: Your Google account authentication credentials.
 *   `SCRIPT_ID`: The unique ID of your Google Apps Script project.
+*   `SHORT_IO_API_KEY`: API key from Short.io for vanity URL updates.
 
 ### GitHub Environment Variables
 Set these in Settings > Environments:
