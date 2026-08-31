@@ -179,3 +179,9 @@ jobs:
           PROD_URL="https://script.google.com/macros/s/$DEPLOYMENT_ID/exec"
           echo "### Production Deployment Successful! ✅" >> $GITHUB_STEP_SUMMARY
           echo "Live Production URL: $PROD_URL" >> $GITHUB_STEP_SUMMARY
+          echo "### Production Deployment Successful! 🚀" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Resource | URL |" >> $GITHUB_STEP_SUMMARY
+          echo "| :--- | :--- |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Vanity URL** | [https://vinyasanilaya.s.gy/VinyasaDashboard](https://vinyasanilaya.s.gy/VinyasaDashboard) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Direct App Link** | [$PROD_URL]($PROD_URL) |" >> $GITHUB_STEP_SUMMARY
