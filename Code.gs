@@ -17,10 +17,20 @@ function doGet(e) {
   // 1. Check if identity is hidden (Google Privacy Restriction)
   if (!userEmail) {
     return HtmlService.createHtmlOutput(
-      "<div style='font-family: sans-serif; text-align: center; margin-top: 50px;'>" +
-      "<h2>🔒 Identity Required</h2>" +
-      "<p>Google has withheld your identity for privacy. To access this dashboard:</p>" +
-      "<ol style='display: inline-block; text-align: left;'><li>Ensure you are logged into your Google Account.</li><li>Contact the admin to ensure this script is shared with your email.</li></ol>" +
+      "<div style='font-family: sans-serif; text-align: center; margin-top: 100px; padding: 20px;'>" +
+        "<h2 style='color: #d93025;'>🔒 Identity Required</h2>" +
+        "<p>To verify your access, you must grant this app permission to see your email address.</p>" +
+        "<div style='margin: 20px 0;'>" +
+          "<button onclick='authorize()' style='padding: 12px 24px; background-color: #1a73e8; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;'>Grant Access & Sign In</button>" +
+        "</div>" +
+        "<p style='font-size: 12px; color: #666;'>Tip: If you are logged into multiple Google accounts, please use an <b>Incognito window</b>.</p>" +
+        "<script>" +
+          "function authorize() {" +
+            "google.script.run.withSuccessHandler(function() {" +
+              "window.location.reload();" +
+            "}).loginTrigger();" +
+          "}" +
+        "</script>" +
       "</div>"
     ).setTitle('Identity Required');
   }
@@ -43,6 +53,15 @@ function doGet(e) {
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
     .setFaviconUrl('https://ik.imagekit.io/h87o83ayxm/Icons/Icon03_png');
+}
+
+/**
+ * Dummy function used to trigger the Google OAuth Consent popup 
+ * if the user has not yet authorized the web app.
+ */
+function loginTrigger() {
+  console.log("Authorization trigger called by: " + Session.getActiveUser().getEmail());
+  return true;
 }
 
 function include(filename) {
