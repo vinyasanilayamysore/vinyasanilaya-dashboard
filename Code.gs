@@ -2,7 +2,30 @@ var ID_GUESTS_LIST = "1Puw0OezY18OWFt8wtwzv5BFxcJw314Hfov5GZMUXCbk";
 
 var FIREBASE_PROJECT_ID = "vinyasanilaya-website"; // Replace with your Project ID
 
-function doGet() {
+/**
+ * Whitelist of allowed email addresses.
+ * Add or remove emails here to control dashboard access.
+ */
+const ALLOWED_EMAILS = [
+  "vinyasanilayamysore@gmail.com",
+  "yashaswini.hj.vinay@gmail.com"
+];
+
+function doGet(e) {
+  const userEmail = Session.getActiveUser().getEmail();
+  
+  // Authorization Check
+  if (!userEmail || !ALLOWED_EMAILS.includes(userEmail)) {
+    return HtmlService.createHtmlOutput(
+      "<div style='font-family: sans-serif; text-align: center; margin-top: 50px;'>" +
+      "<h2>🚫 Access Denied</h2>" +
+      "<p>You are not authorized to access this dashboard.</p>" +
+      "<p style='color: #666;'>Signed in as: <b>" + (userEmail || "Unknown User") + "</b></p>" +
+      "</div>"
+    ).setTitle('Access Denied');
+  }
+
+  // Serve the dashboard if authorized
   return HtmlService.createTemplateFromFile('Index')
     .evaluate()
     .setTitle('Vinyasa Nilaya | Guest Dashboard')
