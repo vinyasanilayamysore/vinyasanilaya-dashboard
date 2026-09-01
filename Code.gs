@@ -27,7 +27,10 @@ function doGet(e) {
         "<script>" +
           "function authorize() {" +
             "google.script.run.withSuccessHandler(function() {" +
-              "window.location.reload();" +
+              "window.top.location.reload();" +
+            "}).withFailureHandler(function(err) {" +
+              "console.error(err);" +
+              "alert('Authorization failed or popup blocked. Please refresh the page manually.');" +
             "}).loginTrigger();" +
           "}" +
         "</script>" +
