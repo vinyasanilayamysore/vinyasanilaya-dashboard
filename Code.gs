@@ -14,13 +14,24 @@ const ALLOWED_EMAILS = [
 function doGet(e) {
   const userEmail = Session.getActiveUser().getEmail();
   
-  // Authorization Check
-  if (!userEmail || !ALLOWED_EMAILS.includes(userEmail)) {
+  // 1. Check if identity is hidden (Google Privacy Restriction)
+  if (!userEmail) {
+    return HtmlService.createHtmlOutput(
+      "<div style='font-family: sans-serif; text-align: center; margin-top: 50px;'>" +
+      "<h2>🔒 Identity Required</h2>" +
+      "<p>Google has withheld your identity for privacy. To access this dashboard:</p>" +
+      "<ol style='display: inline-block; text-align: left;'><li>Ensure you are logged into your Google Account.</li><li>Contact the admin to ensure this script is shared with your email.</li></ol>" +
+      "</div>"
+    ).setTitle('Identity Required');
+  }
+
+  // 2. Authorization Whitelist Check
+  if (!ALLOWED_EMAILS.includes(userEmail)) {
     return HtmlService.createHtmlOutput(
       "<div style='font-family: sans-serif; text-align: center; margin-top: 50px;'>" +
       "<h2>🚫 Access Denied</h2>" +
       "<p>You are not authorized to access this dashboard.</p>" +
-      "<p style='color: #666;'>Signed in as: <b>" + (userEmail || "Unknown User") + "</b></p>" +
+      "<p style='color: #666;'>Signed in as: <b>" + userEmail + "</b></p>" +
       "</div>"
     ).setTitle('Access Denied');
   }
