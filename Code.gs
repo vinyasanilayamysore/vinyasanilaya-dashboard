@@ -1294,7 +1294,7 @@ function fetchFirestoreGuestsRegistry() {
         emergencyPhone: (f.emergencyContact && f.emergencyContact.mapValue.fields.phone) ? f.emergencyContact.mapValue.fields.phone.stringValue : "-",
         selfieUrl: f.selfieUrl ? f.selfieUrl.stringValue : "",
         checkinStatus: f.verifiedStatus ? f.verifiedStatus.stringValue : "Verified",
-        address: (f.travelDetails && f.travelDetails.mapValue.fields.arrivingCity) ? f.travelDetails.mapValue.fields.arrivingCity.stringValue : "-"
+        address: (f.verification && f.verification.mapValue.fields.address && f.verification.mapValue.fields.address.stringValue) ? f.verification.mapValue.fields.address.stringValue : ((f.travelDetails && f.travelDetails.mapValue.fields.arrivingCity) ? f.travelDetails.mapValue.fields.arrivingCity.stringValue : "-")
       };
     }).sort((a, b) => {
       // Client-side sort to mirror orderBy("createdAt", "desc")
@@ -1380,8 +1380,8 @@ function updateFirestoreGuestRecord(docId, updates) {
       'updateMask.fieldPaths=guestDetails.name',
       'updateMask.fieldPaths=guestDetails.phone',
       'updateMask.fieldPaths=verification.idNo',
+      'updateMask.fieldPaths=verification.address',
       'updateMask.fieldPaths=travelDetails.arrivingCity',
-      'updateMask.fieldPaths=travelDetails.address',
       'updateMask.fieldPaths=emergencyContact.name',
       'updateMask.fieldPaths=emergencyContact.phone'
     ].join('&');
@@ -1399,11 +1399,16 @@ function updateFirestoreGuestRecord(docId, updates) {
           }
         },
         verification: {
-          mapValue: { fields: { idNo: { stringValue: updates.idNo } } }
+          mapValue: {
+            fields: {
+              idNo: { stringValue: updates.idNo },
+              address: { stringValue: updates.address }
+            }
+          }
         },
         travelDetails: {
           mapValue: { fields: { 
-            arrivingCity: { stringValue: updates.address },
+            arrivingCity: { stringValue: updates.arrivingCity },
             address: { stringValue: updates.address }
           } }
         },
