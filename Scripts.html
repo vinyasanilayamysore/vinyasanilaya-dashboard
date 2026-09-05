@@ -1565,6 +1565,10 @@ function openQidHubModal() {
     // 2. Display the structural modal workspace framework container instantly
     getQidModalInstance().show();
     
+    // Reset storage label to "Calculating" while fresh data is being retrieved
+    const storageLabel = document.getElementById('storage-usage-text');
+    if (storageLabel) storageLabel.innerText = "Calculating...";
+
     document.getElementById('qidUserFeed').innerHTML = 
         '<div class="col-12 text-center py-5">' +
             '<div class="spinner-border text-success spinner-border-sm me-2" role="status"></div>' +
@@ -1597,7 +1601,6 @@ function openQidHubModal() {
             
             // 4. Proceed to fetch main guest list records once years are ready
             fetchMasterQidDataMatrix();
-            updateStorageMetricsUI();
         })
         .withFailureHandler(function(err) {
             console.error(">>> [UI LIFECYCLE FAULT] Firestore years inventory failed: ", err.message);
@@ -1702,6 +1705,7 @@ function fetchMasterQidDataMatrix() {
             globalQidDataStore = records || [];
             activeSelectedIds = []; // Soft clear previous session selection vectors
             filterQidRecords(); // Renders grid cards with local persistent filters applied
+            updateStorageMetricsUI(); // Trigger metrics update now that globalQidDataStore is populated
         })
         .withFailureHandler(function(err) {
             document.getElementById('qidUserFeed').innerHTML = 
