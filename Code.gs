@@ -1284,6 +1284,7 @@ function fetchFirestoreGuestsRegistry() {
         timestamp: f.createdAt ? f.createdAt.timestampValue : (f.timestamp ? f.timestamp.timestampValue : ""),
         name: (f.guestDetails && f.guestDetails.mapValue.fields.name) ? f.guestDetails.mapValue.fields.name.stringValue : "Unknown",
         phone: (f.guestDetails && f.guestDetails.mapValue.fields.phone) ? f.guestDetails.mapValue.fields.phone.stringValue : "-",
+        selfieUrl: f.guestDetails.selfieUrl ? f.guestDetails.selfieUrl.stringValue : "",
         idType: (f.verification && f.verification.mapValue.fields.idType) ? f.verification.mapValue.fields.idType.stringValue : "Govt ID",
         idNo: (f.verification && f.verification.mapValue.fields.idNo) ? f.verification.mapValue.fields.idNo.stringValue : "-",
         frontUrl: (f.verification && f.verification.mapValue.fields.idFrontUrl) ? f.verification.mapValue.fields.idFrontUrl.stringValue : "",
@@ -1292,7 +1293,6 @@ function fetchFirestoreGuestsRegistry() {
         purpose: (f.travelDetails && f.travelDetails.mapValue.fields.purpose) ? f.travelDetails.mapValue.fields.purpose.stringValue : "-",
         emergencyName: (f.emergencyContact && f.emergencyContact.mapValue.fields.name) ? f.emergencyContact.mapValue.fields.name.stringValue : "-",
         emergencyPhone: (f.emergencyContact && f.emergencyContact.mapValue.fields.phone) ? f.emergencyContact.mapValue.fields.phone.stringValue : "-",
-        selfieUrl: f.selfieUrl ? f.selfieUrl.stringValue : "",
         checkinStatus: f.verifiedStatus ? f.verifiedStatus.stringValue : "Verified",
         address: (f.verification && f.verification.mapValue.fields.address && f.verification.mapValue.fields.address.stringValue) ? f.verification.mapValue.fields.address.stringValue : ((f.travelDetails && f.travelDetails.mapValue.fields.arrivingCity) ? f.travelDetails.mapValue.fields.arrivingCity.stringValue : "-")
       };
@@ -1326,7 +1326,7 @@ function deleteFirestoreGuestRecord(docId) {
     const assets = [];
     if (f.verification && f.verification.mapValue && f.verification.mapValue.fields.idFrontUrl) assets.push(f.verification.mapValue.fields.idFrontUrl.stringValue);
     if (f.verification && f.verification.mapValue && f.verification.mapValue.fields.idBackUrl) assets.push(f.verification.mapValue.fields.idBackUrl.stringValue);
-    if (f.selfieUrl) assets.push(f.selfieUrl.stringValue);
+    if (f.guestDetails.selfieUrl) assets.push(f.guestDetails.selfieUrl.stringValue);
 
     // 3. Attempt to delete files from Firebase Storage
     assets.forEach(url => {
